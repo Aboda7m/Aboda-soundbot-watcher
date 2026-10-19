@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Secrets & Environment variables
+.env
+.env.*
+!.env.example
+
+# Local Database & Backups
+db.json
+db.json.bak
+*.json.bak
+
+# Local Sounds Storage
+sounds/
+*.mp3
+*.wav
+*.opus
+
+# Logs & Debugging
+*.log
+npm-debug.log*
+
+# System & OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE & Editor folders
+.vscode/
+.idea/
