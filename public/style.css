@@ -40,3 +40,15 @@ li { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
 .tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
 .tag.live { color: var(--live); border-color: var(--live); }
 .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+
+.player { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 22px; }
+.player label { color: var(--muted); font-size: 13px; }
+select, button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; }
+select { min-width: 0; max-width: 100%; }
+button { cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:focus-visible, select:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
+button:disabled, select:disabled { opacity: .5; cursor: default; }
+.now { margin: 0; flex-basis: 100%; min-height: 1.45em; font-size: 13px; color: var(--muted); }
+.now.error { color: var(--bad); }
+.channel-head .play { margin-left: 10px; padding: 2px 10px; font-size: 13px; }
