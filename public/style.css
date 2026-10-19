@@ -1,0 +1,42 @@
+:root {
+  --bg: #11161d;
+  --panel: #19202a;
+  --line: #2a3441;
+  --text: #e7ebf0;
+  --muted: #8d99a8;
+  --live: #4cc38a;
+  --warn: #e0a84a;
+  --bad: #e06c6c;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0 auto;
+  max-width: 640px;
+  padding: 28px 20px 64px;
+  color: var(--text);
+  font: 15px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+.status { margin: 0; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.status[data-state="live"]::before { background: var(--live); }
+.status[data-state="down"]::before { background: var(--bad); }
+
+.guild { margin-bottom: 28px; }
+.guild h2 { margin: 0 0 10px; font-size: 16px; font-weight: 650; }
+.channel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+.channel-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.channel-name { font-weight: 600; }
+.count { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+ul { list-style: none; margin: 0; padding: 0; }
+li { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; flex: none; background: var(--line); object-fit: cover; }
+.initial { display: grid; place-items: center; color: var(--muted); font-size: 13px; font-weight: 600; }
+.name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tags { margin-left: auto; display: flex; gap: 6px; flex: none; }
+.tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.tag.live { color: var(--live); border-color: var(--live); }
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
