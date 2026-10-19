@@ -29,3 +29,8 @@ desktop.ini
 # IDE & Editor folders
 .vscode/
 .idea/
+
+
+# Voice Activity Logs
+voice-activity-logs.json
+voice-activity-logs.txt

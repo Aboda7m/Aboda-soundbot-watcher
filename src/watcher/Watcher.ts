@@ -1,6 +1,7 @@
 import { Events, type Client } from "discord.js";
 import type { ServerResponse } from "node:http";
 import { buildSnapshot } from "./snapshot.ts";
+import { trackVoiceActivity } from "./VoiceActivityLogger.ts";
 
 const REFRESH_EVENTS = [
   Events.ClientReady,
@@ -34,7 +35,22 @@ export class Watcher {
   constructor(client: Client, opts: WatcherOptions) {
     this.#client = client;
     this.#opts = opts;
-    for (const ev of REFRESH_EVENTS) client.on(ev as string, () => this.schedule());
+    
+    for (const ev of REFRESH_EVENTS) {
+      client.on(ev as string, (...args) => {
+        // Intercept voice state updates to run the dedicated logger file
+        if (ev === Events.VoiceStateUpdate) {
+          const [oldState, newState] = args;
+          try {
+            trackVoiceActivity(oldState, newState);
+          } catch (err) {
+            console.error("Failed to log voice activity:", err);
+          }
+        }
+        this.schedule();
+      });
+    }
+
     this.#heartbeat = setInterval(() => {
       for (const res of this.#sse) res.write(": ping\n\n");
     }, 25_000);
