@@ -125,8 +125,10 @@ export function createHttpServer(d: HttpDeps): Server {
       const isPost = req.method === "POST";
       if (req.method !== "GET" && !isPost) return void res.writeHead(405, { Allow: "GET, POST" }).end();
 
-      // Reads: page/API/stream. The key may come from the page URL (?key=) or the X-Access-Key header.
-      if (!isPost && d.accessKey) {
+      // Allow static frontend assets (HTML, CSS, JS) to load without requiring key check,
+      // while protecting all data APIs and live streams with the access key.
+      const isStaticFile = url.pathname in STATIC;
+      if (!isPost && d.accessKey && !isStaticFile) {
         const given = url.searchParams.get("key") ?? (req.headers["x-access-key"] as string | undefined) ?? "";
         if (!safeEqual(given, d.accessKey))
           return void res.writeHead(401, SECURITY_HEADERS).end("Missing or wrong key.");
