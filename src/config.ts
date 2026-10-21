@@ -14,6 +14,7 @@ export interface Config {
   maxQueuePerGuild: number;
   idleLeaveMs: number;
   countPlays: boolean;
+  commandPrefix: string;
 }
 
 const num = (v: string | undefined, fallback: number): number => {
@@ -42,5 +43,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maxQueuePerGuild: Math.max(1, num(env.MAX_QUEUE_PER_GUILD, 10)),
     idleLeaveMs: num(env.IDLE_LEAVE_MS, 5000),
     countPlays: flag(env.COUNT_PLAYS, true),
+    commandPrefix: env.COMMAND_PREFIX?.trim() || "!",
   };
 }

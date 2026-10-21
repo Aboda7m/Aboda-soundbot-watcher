@@ -2,6 +2,7 @@
 import { Events } from "discord.js";
 import { loadConfig } from "./config.ts";
 import { createClient, toVoiceMove } from "./discord/client.ts";
+import { registerTextCommands } from "./discord/textCommands.ts";
 import { createHttpServer } from "./http/server.ts";
 import { createCooldown, planIntros } from "./sound/introRules.ts";
 import { SoundLibrary } from "./sound/SoundLibrary.ts";
@@ -62,6 +63,8 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     console.error("Intro handling failed:", err);
   }
 });
+
+registerTextCommands(client, { library, queue, prefix: config.commandPrefix });
 
 const server = createHttpServer({
   host: config.host,

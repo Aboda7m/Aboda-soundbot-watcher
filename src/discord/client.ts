@@ -2,9 +2,16 @@ import { Client, GatewayIntentBits } from "discord.js";
 import type { VoiceMove } from "../sound/introRules.ts";
 import type { VoiceState } from "discord.js";
 
-/** One shared client. Voice needs only these two intents; no privileged intents are required. */
+/** One shared client. MessageContent is a PRIVILEGED intent (needed for the !sound text command): enable it in the Developer Portal. */
 export function createClient(): Client {
-  return new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
+  return new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildVoiceStates,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+    ],
+  });
 }
 
 /** Translate a discord.js voice-state change into the plain data the intro rules use. */
