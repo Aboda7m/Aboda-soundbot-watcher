@@ -2,21 +2,119 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Voice</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Soundboard</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header>
-    <h1>In voice now</h1>
-    <p id="status" class="status" data-state="connecting">Connecting</p>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <div class="top-row">
+      <h1>Soundboard</h1>
+      <p id="status" class="status" data-state="connecting" role="status">Connecting</p>
+    </div>
+
+    <section class="target" aria-labelledby="target-title">
+      <h2 id="target-title" class="target-title">Play in</h2>
+      <div class="target-fields">
+        <label class="field">
+          <span class="field-label">Server</span>
+          <select id="guild-select" disabled><option>No servers</option></select>
+        </label>
+        <label class="field">
+          <span class="field-label">Voice channel</span>
+          <select id="channel-select" disabled><option>No channels</option></select>
+        </label>
+      </div>
+      <p id="target-hint" class="target-hint"></p>
+    </section>
+
+    <div id="now" class="now" hidden>
+      <span class="now-bars" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span id="now-text" class="now-text"></span>
+      <button id="now-skip" class="btn small" type="button">Skip</button>
+    </div>
+
+    <nav class="tabs" aria-label="Sections">
+      <div role="tablist" aria-label="Views" id="tablist">
+        <button role="tab" id="tab-sounds" aria-controls="panel-sounds" aria-selected="true" data-tab="sounds">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
+          <span>Sounds</span><b id="count-sounds" class="badge"></b>
+        </button>
+        <button role="tab" id="tab-favorites" aria-controls="panel-favorites" aria-selected="false" tabindex="-1" data-tab="favorites">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8L3.5 9.7l5.9-.9z"/></svg>
+          <span>Favorites</span><b id="count-favorites" class="badge"></b>
+        </button>
+        <button role="tab" id="tab-recent" aria-controls="panel-recent" aria-selected="false" tabindex="-1" data-tab="recent">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+          <span>Recent</span><b id="count-recent" class="badge"></b>
+        </button>
+        <button role="tab" id="tab-queue" aria-controls="panel-queue" aria-selected="false" tabindex="-1" data-tab="queue">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h12M4 12h12M4 18h7M18 14l4 3-4 3z"/></svg>
+          <span>Queue</span><b id="count-queue" class="badge"></b>
+        </button>
+        <button role="tab" id="tab-voice" aria-controls="panel-voice" aria-selected="false" tabindex="-1" data-tab="voice">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>
+          <span>Voice</span><b id="count-voice" class="badge"></b>
+        </button>
+      </div>
+    </nav>
   </header>
-  <section class="player">
-    <label for="sound">Sound</label>
-    <select id="sound" disabled><option>Loading sounds</option></select>
-    <p id="now" class="now" role="status"></p>
-  </section>
-  <main id="root"></main>
+
+  <main id="main" tabindex="-1">
+    <div id="toolbar" class="toolbar">
+      <label class="search">
+        <span class="visually-hidden">Search sounds</span>
+        <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+        <input id="search" type="search" placeholder="Search sounds  ( / )" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="sort">
+        <span class="field-label">Sort</span>
+        <select id="sort">
+          <option value="name">Name</option>
+          <option value="count">Most played</option>
+        </select>
+      </label>
+      <div id="tag-filters" class="chips" role="group" aria-label="Filter by tag" hidden></div>
+    </div>
+
+    <section id="panel-sounds" role="tabpanel" aria-labelledby="tab-sounds" tabindex="-1">
+      <h2 class="panel-title" id="title-sounds">All sounds</h2>
+      <p class="results" id="results-sounds"></p>
+      <div id="grid-sounds" class="grid"></div>
+    </section>
+
+    <section id="panel-favorites" role="tabpanel" aria-labelledby="tab-favorites" tabindex="-1" hidden>
+      <h2 class="panel-title" id="title-favorites">Favorites</h2>
+      <p class="results" id="results-favorites"></p>
+      <div id="grid-favorites" class="grid"></div>
+    </section>
+
+    <section id="panel-recent" role="tabpanel" aria-labelledby="tab-recent" tabindex="-1" hidden>
+      <div class="panel-head">
+        <h2 class="panel-title" id="title-recent">Recently played</h2>
+        <button id="clear-recent" class="btn small" type="button">Clear history</button>
+      </div>
+      <p class="results" id="results-recent"></p>
+      <div id="grid-recent" class="grid"></div>
+    </section>
+
+    <section id="panel-queue" role="tabpanel" aria-labelledby="tab-queue" tabindex="-1" hidden>
+      <h2 class="panel-title">Queue</h2>
+      <div id="queue-root"></div>
+    </section>
+
+    <section id="panel-voice" role="tabpanel" aria-labelledby="tab-voice" tabindex="-1" hidden>
+      <h2 class="panel-title">In voice now</h2>
+      <div id="voice-root"></div>
+    </section>
+  </main>
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <div id="toasts-error" class="toasts toasts-error" role="alert"></div>
+
   <script src="/app.js"></script>
 </body>
 </html>
