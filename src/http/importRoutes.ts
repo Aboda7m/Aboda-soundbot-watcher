@@ -82,6 +82,21 @@ export async function handleImportRoute(
     return true;
   }
 
+  if (pathname === "/api/import/youtube") {
+    if (!kit.guard(req, res, "application/json")) return true;
+    const body = await readJson();
+    if (!body || typeof body.url !== "string") {
+      kit.json(res, 400, { ok: false, error: "Body must be JSON with a YouTube URL." });
+      return true;
+    }
+    try {
+      kit.json(res, 201, { ok: true, ...(await importer.importYouTube(body.url)) });
+    } catch (err) {
+      fail(err);
+    }
+    return true;
+  }
+
   if (pathname === "/api/import/save") {
     if (!kit.guard(req, res, "application/json")) return true;
     const body = await readJson();

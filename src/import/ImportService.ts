@@ -8,11 +8,8 @@ import { pipeline } from "node:stream/promises";
 import type { SoundLibrary } from "../sound/SoundLibrary.ts";
 import { checkName, cleanUploadName, suggestName } from "./names.ts";
 import { DURATION_EPSILON, resolveTrim, type TrimPlan } from "./trim.ts";
+import { defaultYtDlpPath } from "../tools/ytdlp.ts";
 
-/**
- * Upload extension -> the FFmpeg demuxer that must really be what the file is. The extension only filters obvious
- * mistakes; the content (ffprobe + the demuxer allowlist) decides. Video containers are accepted for their audio only.
- */
 export const EXT_DEMUXER: Record<string, string> = {
   ".mp3": "mp3", ".wav": "wav", ".ogg": "ogg", ".oga": "ogg", ".opus": "ogg", ".flac": "flac", ".aac": "aac",
   ".aif": "aiff", ".aiff": "aiff", ".wma": "asf", ".wmv": "asf", ".avi": "avi",
@@ -24,8 +21,38 @@ const ALL_DEMUXERS = [...new Set(Object.values(EXT_DEMUXER))];
 
 const PROBE_TIMEOUT_MS = 15_000;
 const STAGED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const STAGED_FILE = /^[0-9a-f-]{36}\.(src|part|out\d+\.\w+)$/;
+const STAGED_FILE = /^[0-9a-f-]{36}\.(src|part|out\d+\.\w+|\.src\..*)$/;
 const MIN_AUDIO_SEC = 0.05;
+
+const ALLOWED_YOUTUBE_HOSTS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "youtu.be",
+]);
+
+function validateYouTubeUrl(urlString: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    throw new ImportError(400, "Invalid URL format.");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new ImportError(400, "Only secure HTTPS YouTube URLs are supported.");
+  }
+  if (parsed.username || parsed.password) {
+    throw new ImportError(400, "URLs with credentials are not allowed.");
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (!ALLOWED_YOUTUBE_HOSTS.has(hostname)) {
+    throw new ImportError(400, "Only official YouTube domains (youtube.com, youtu.be) are permitted.");
+  }
+  if (parsed.port && parsed.port !== "443") {
+    throw new ImportError(400, "Non-standard ports are not allowed.");
+  }
+  return parsed;
+}
 
 export class ImportError extends Error {
   status: number;
@@ -41,32 +68,22 @@ export interface ImportOptions {
   soundsDir: string;
   acceptedExtensions: string[];
   stagingDir: string;
-  /** biggest accepted upload (the original file, audio or video) */
   maxUploadBytes: number;
-  /** longest sound that may be saved: applies to custom ranges and to "Full audio" */
   maxOutputSec: number;
-  /** length of the default "first N seconds" selection */
   defaultTrimSec: number;
-  /** biggest saved file; checked against an estimate before FFmpeg runs and against the real size after */
   maxOutputBytes: number;
-  /** upper bound for one FFmpeg run (the effective timeout scales with the selection length) */
   processTimeoutMs: number;
   ffmpegPath: string;
   ffprobePath: string;
-  /** staged imports are deleted after this long without activity (default 30 min) */
   ttlMs?: number;
-  /** pending imports (uploading + staged) at once (default 3: sources can be large) */
   maxStaged?: number;
-  /** free bytes on the filesystem holding `dir`, or null if unknown. Injectable for tests. */
   freeSpace?(dir: string): Promise<number | null>;
   log?(message: string, err?: unknown): void;
 }
 
 interface Probe {
   format: string;
-  /** codec of the audio stream that will be used */
   codec: string;
-  /** ffprobe stream index of that audio stream */
   audioIndex: number | null;
   durationSec: number | null;
   sampleRate: number | null;
@@ -77,20 +94,19 @@ interface Probe {
 
 interface Staged {
   id: string;
-  srcPath: string; // the original upload, kept so the trim can be changed
+  srcPath: string;
   probe: Probe;
-  outPath: string; // current rendered result, the file that gets previewed and saved
+  outPath: string;
   ext: string;
   mime: string;
   sizeBytes: number;
   version: number;
   touchedAt: number;
-  busy: boolean; // rendering
+  busy: boolean;
   saving: boolean;
 }
 
 export interface RenderResult {
-  /** increases with every render; lets the page avoid a cached preview */
   version: number;
   mode: TrimPlan["mode"];
   startSec: number;
@@ -135,7 +151,6 @@ function run(cmd: string, args: string[], timeout: number): Promise<{ stdout: st
   });
 }
 
-/** "D  mov,mp4,m4a  QuickTime" style listings -> set of every name. */
 function parseNames(text: string, flagPattern: RegExp, mustHave: string): Set<string> {
   const names = new Set<string>();
   for (const line of text.split("\n")) {
@@ -155,12 +170,6 @@ async function defaultFreeSpace(dir: string): Promise<number | null> {
   }
 }
 
-/**
- * Import pipeline: stage (upload + validate + default trim) -> optional re-trim -> preview -> save.
- * The original upload stays in a private temp folder under a random id until saved, discarded or expired;
- * every render is derived from it. The client never supplies a path.
- * Only one ffprobe/ffmpeg job runs at a time, and every job has a timeout and an output cap.
- */
 export class ImportService {
   #o: ImportOptions;
   #staged = new Map<string, Staged>();
@@ -179,7 +188,6 @@ export class ImportService {
     this.#wantsOut = accepted.includes(".mp3") || accepted.includes(".wav");
     this.#outExt = this.#wantsOut ? (accepted.includes(".mp3") ? ".mp3" : ".wav") : null;
     mkdirSync(opts.stagingDir, { recursive: true });
-    // Remove leftovers of a previous run. Only files that match our own naming are touched.
     for (const f of readdirSync(opts.stagingDir)) {
       if (STAGED_FILE.test(f)) rmSync(join(opts.stagingDir, f), { force: true });
     }
@@ -197,7 +205,6 @@ export class ImportService {
     };
   }
 
-  /** Is the feature usable right now? Re-checked each call until it succeeds, so installing ffmpeg needs no restart. */
   async status(): Promise<{ ready: boolean; problem?: string }> {
     if (!this.#wantsOut) return { ready: false, problem: "ACCEPTED_EXTENSIONS must include .mp3 or .wav for imports to work." };
     try {
@@ -208,7 +215,6 @@ export class ImportService {
     }
   }
 
-  /** Checks ffprobe/ffmpeg exist and that this build can read the formats and write the output format we need. */
   async #ensureTools(): Promise<void> {
     if (this.#toolsOk) return;
     for (const [cmd, label] of [[this.#o.ffprobePath, "ffprobe"], [this.#o.ffmpegPath, "ffmpeg"]] as const) {
@@ -247,7 +253,6 @@ export class ImportService {
     this.#toolsOk = true;
   }
 
-  /** Receive an upload, validate it, and render the default selection (the first N seconds). */
   async stage(body: Readable, rawFileName: string, declaredLength: number | null): Promise<StagedInfo> {
     this.#sweep();
     const fileName = cleanUploadName(rawFileName);
@@ -301,7 +306,79 @@ export class ImportService {
     }
   }
 
-  /** Re-render a staged import with a different selection. The previous render is replaced only if the new one succeeds. */
+  async importYouTube(urlString: string): Promise<StagedInfo> {
+    this.#sweep();
+    await this.#ensureTools();
+    const validatedUrl = validateYouTubeUrl(urlString);
+
+    if (this.#staged.size + this.#uploading >= (this.#o.maxStaged ?? 3)) {
+      throw new ImportError(429, "Too many pending imports. Save or discard one first.");
+    }
+    await this.#checkDisk(null);
+
+    const id = randomUUID();
+    const outTemplate = join(this.#o.stagingDir, `${id}.src.%(ext)s`);
+    const ytDlpPath = defaultYtDlpPath();
+
+    this.#uploading++;
+    try {
+      await run(
+        ytDlpPath,
+        [
+          "--no-config",
+          "--no-playlist",
+          "--max-filesize", String(this.#o.maxUploadBytes),
+          "-f", "bestaudio/best",
+          "-o", outTemplate,
+          validatedUrl.toString(),
+        ],
+        120_000,
+      );
+
+      const prefix = `${id}.src.`;
+      const matched = readdirSync(this.#o.stagingDir).filter((f) => f.startsWith(prefix));
+      if (matched.length === 0) {
+        throw new ImportError(422, "yt-dlp finished but no output file was found.");
+      }
+      const srcName = matched[0]!;
+      const srcPath = join(this.#o.stagingDir, srcName);
+
+      return await this.#exclusive(async () => {
+        const probe = await this.#probe(srcPath);
+        this.#validateSource(probe);
+        const trim = resolveTrim({ mode: "first" }, probe.durationSec, this.#trimLimits());
+        if (!trim.ok) throw new ImportError(422, trim.error);
+        const r = await this.#render(id, srcPath, probe, trim.plan, 1);
+        this.#staged.set(id, {
+          id, srcPath, probe, outPath: r.path, ext: r.result.extension, mime: MIME[r.result.extension] ?? "application/octet-stream",
+          sizeBytes: r.result.sizeBytes, version: 1, touchedAt: Date.now(), busy: false, saving: false,
+        });
+        const suggested = suggestName(srcName);
+        return {
+          id,
+          suggestedName: suggested,
+          nameTaken: suggested !== "" && this.#taken(suggested),
+          original: {
+            fileName: srcName,
+            sizeBytes: (await stat(srcPath)).size,
+            format: probe.format,
+            codec: probe.codec,
+            durationSec: probe.durationSec,
+            hasVideo: probe.hasVideo,
+            audioStreams: probe.audioStreams,
+          },
+          result: r.result,
+        };
+      });
+    } catch (err) {
+      if (err instanceof ImportError) throw err;
+      this.#o.log?.("YouTube download failed", err);
+      throw new ImportError(422, `Failed to download from YouTube: ${(err as Error).message}`);
+    } finally {
+      this.#uploading--;
+    }
+  }
+
   async process(id: string, rawRequest: unknown): Promise<RenderResult> {
     const s = this.#get(id);
     if (s.saving || s.busy) throw new ImportError(409, "This import is busy. Try again in a moment.");
@@ -332,13 +409,11 @@ export class ImportService {
     });
   }
 
-  /** Path + type of the current render for the preview player, or null. */
   preview(id: string): { path: string; mime: string; sizeBytes: number } | null {
     const s = STAGED_ID.test(id) ? this.#staged.get(id) : undefined;
     return s ? { path: s.outPath, mime: s.mime, sizeBytes: s.sizeBytes } : null;
   }
 
-  /** Move the current render into the sounds folder under a validated name. Never overwrites. */
   async save(id: string, rawName: unknown): Promise<{ name: string; file: string }> {
     const s = this.#get(id);
     const checked = checkName(rawName);
@@ -349,7 +424,7 @@ export class ImportService {
 
     s.saving = true;
     const finalPath = join(this.#o.soundsDir, `${name}${s.ext}`);
-    const tmpPath = join(this.#o.soundsDir, `.import-${randomUUID()}.tmp`); // hidden + unknown extension: the library ignores it
+    const tmpPath = join(this.#o.soundsDir, `.import-${randomUUID()}.tmp`);
     try {
       try {
         if (!(await stat(this.#o.soundsDir)).isDirectory()) throw new Error("not a directory");
@@ -360,12 +435,11 @@ export class ImportService {
       try {
         await copyFile(s.outPath, tmpPath, constants.COPYFILE_EXCL);
         try {
-          await link(tmpPath, finalPath); // atomic and refuses to replace an existing file
+          await link(tmpPath, finalPath);
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;
           if (code === "EEXIST") throw new ImportError(409, `A sound named "${name}" already exists. Choose another name.`);
           if (!["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"].includes(code ?? "")) throw err;
-          // Filesystem without hard links (FAT/exFAT, some network shares): fall back to rename after an existence check.
           if (await stat(finalPath).then(() => true, () => false))
             throw new ImportError(409, `A sound named "${name}" already exists. Choose another name.`);
           await rename(tmpPath, finalPath);
@@ -377,7 +451,7 @@ export class ImportService {
       } finally {
         await unlink(tmpPath).catch(() => {});
       }
-      this.#o.library.invalidate(); // new file is visible immediately, even on filesystems with coarse timestamps
+      this.#o.library.invalidate();
       this.#staged.delete(id);
       this.#dispose(s);
       return { name, file: `${name}${s.ext}` };
@@ -399,8 +473,6 @@ export class ImportService {
     for (const s of this.#staged.values()) this.#dispose(s);
     this.#staged.clear();
   }
-
-  // ---------------------------------------------------------------------------------------------
 
   #trimLimits() {
     return { defaultSec: this.#o.defaultTrimSec, maxOutputSec: this.#o.maxOutputSec };
@@ -505,7 +577,6 @@ export class ImportService {
     const hasVideo = streams.some(
       (s) => s.codec_type === "video" && !((s.disposition as Record<string, number> | undefined)?.attached_pic),
     );
-    // first audio stream FFmpeg can actually describe (it has a codec and a sample rate)
     const usable = audio.find((s) => typeof s.codec_name === "string" && s.codec_name !== "none" && num(s.sample_rate) !== null);
     return {
       format: (data.format?.format_name ?? "").split(",")[0] ?? "",
@@ -519,7 +590,6 @@ export class ImportService {
     };
   }
 
-  /** There is no length limit on the source (that is what trimming is for); it only needs a usable audio track. */
   #validateSource(p: Probe): void {
     if (p.audioStreams < 1)
       throw new ImportError(422, p.hasVideo ? "This video has no audio track, so there is nothing to import." : "No audio was found in this file.");
@@ -527,7 +597,6 @@ export class ImportService {
     if (p.durationSec !== null && p.durationSec < MIN_AUDIO_SEC) throw new ImportError(422, "The audio is empty or too short to play.");
   }
 
-  /** Keep the source untouched only if it is really a plain MP3/WAV in an accepted extension, within the length cap, with nothing to trim. */
   #keepExtension(p: Probe): string | null {
     if (p.hasVideo || p.audioStreams !== 1 || p.durationSec === null || p.durationSec > this.#o.maxOutputSec + DURATION_EPSILON) return null;
     const accepted = this.#o.acceptedExtensions.map((e) => e.toLowerCase());
@@ -536,10 +605,6 @@ export class ImportService {
     return null;
   }
 
-  /**
-   * Produce one result file from the source. FFmpeg writes to `<id>.part` and the file is renamed into place only after
-   * it passed the output checks, so an aborted or failed run never leaves something the soundboard (or save) could pick up.
-   */
   async #render(id: string, srcPath: string, probe: Probe, plan: TrimPlan, version: number) {
     const keep = plan.needsTrim ? null : this.#keepExtension(probe);
     const ext = keep ?? this.#outExt!;
@@ -548,7 +613,7 @@ export class ImportService {
     try {
       if (keep) {
         try {
-          await link(srcPath, outPath); // same bytes, no extra disk
+          await link(srcPath, outPath);
         } catch {
           await copyFile(srcPath, partPath);
           await rename(partPath, outPath);
@@ -589,20 +654,18 @@ export class ImportService {
   }
 
   async #convert(srcPath: string, partPath: string, outPath: string, probe: Probe, plan: TrimPlan, ext: string): Promise<void> {
-    // Never ask FFmpeg for more than the cap, even when the header said the file is shorter (headers can lie).
     const limit = plan.lengthSec ?? this.#o.maxOutputSec + 1;
-    const bytesPerSec = ext === ".mp3" ? 40_000 : 192_000; // worst-case estimates for q2 MP3 / 48 kHz stereo 16-bit WAV
+    const bytesPerSec = ext === ".mp3" ? 40_000 : 192_000;
     if (limit * bytesPerSec > this.#o.maxOutputBytes)
       throw new ImportError(422, `That selection would be too large as ${ext.slice(1).toUpperCase()}. Choose a shorter range.`);
     const codec = ext === ".mp3" ? ["-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3"] : ["-c:a", "pcm_s16le", "-f", "wav"];
-    // execFile only accepts a whole number of milliseconds, and `limit` is usually fractional (e.g. a 22.667 s file)
     const timeout = Math.ceil(Math.min(this.#o.processTimeoutMs, Math.max(30_000, 20_000 + limit * 500)));
     try {
       await run(
         this.#o.ffmpegPath,
         ["-nostdin", "-hide_banner", "-loglevel", "error", "-y",
           "-protocol_whitelist", "file", "-format_whitelist", this.#demuxers.join(","), "-threads", "1",
-          ...(plan.startSec > 0 ? ["-ss", fmtSec(plan.startSec)] : []), // before -i: seeks instead of decoding from the start
+          ...(plan.startSec > 0 ? ["-ss", fmtSec(plan.startSec)] : []),
           "-i", srcPath,
           "-map", `0:${probe.audioIndex}`, "-vn", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1",
           "-t", fmtSec(limit),

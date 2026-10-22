@@ -133,6 +133,39 @@ async function handleFile(file) {
   }
 }
 
+// ---------- YouTube import ----------
+
+async function handleYouTubeImport() {
+  banner("");
+  const urlInput = $("yt-url");
+  const url = urlInput.value.trim();
+  if (!url) {
+    banner("Please enter a YouTube video URL.");
+    urlInput.focus();
+    return;
+  }
+
+  show("progress");
+  setProgress("Downloading from YouTube…", null);
+
+  try {
+    const data = await postJson("/api/import/youtube", { url });
+    state.staged = data;
+    showReview(data);
+  } catch (err) {
+    banner(err.message);
+    show("pick");
+  }
+}
+
+$("yt-import").addEventListener("click", handleYouTubeImport);
+$("yt-url").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    handleYouTubeImport();
+  }
+});
+
 // ---------- review: what to keep ----------
 
 function row(label, value, strong) {
@@ -324,6 +357,7 @@ function reset() {
   $("player").pause();
   $("player").removeAttribute("src");
   $("file").value = "";
+  $("yt-url").value = "";
   show("pick", "pick-title");
 }
 
