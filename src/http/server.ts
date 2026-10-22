@@ -13,6 +13,8 @@ import type { Watcher } from "../watcher/Watcher.ts";
 import type { SoundLibrary } from "../sound/SoundLibrary.ts";
 import type { SoundRepository } from "../sound/SoundRepository.ts";
 import type { SoundQueue } from "../sound/SoundQueue.ts";
+import type { ImportService } from "../import/ImportService.ts";
+import { handleImportRoute } from "./importRoutes.ts";
 
 export interface HttpDeps {
   host: string;
@@ -24,6 +26,8 @@ export interface HttpDeps {
   queue: SoundQueue;
   /** true if the guild/channel exists and is a voice channel the bot can see */
   canTarget(guildId: string, channelId: string): boolean;
+  /** Optional media import (page at /import + /api/import/*). Left out = those routes do not exist. */
+  importer?: ImportService;
 }
 
 const PUBLIC_DIR = join(
@@ -33,10 +37,21 @@ const PUBLIC_DIR = join(
   "public",
 );
 
-const STATIC: Record<string, { file: string; type: string }> = {
+const STATIC: Record<string, { file: string; type: string; csp?: string }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
+};
+
+// Served only when an importer is configured. The page plays its own preview audio, hence media-src.
+const IMPORT_STATIC: Record<string, { file: string; type: string; csp?: string }> = {
+  "/import": {
+    file: "import.html",
+    type: "text/html; charset=utf-8",
+    csp: "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; connect-src 'self'",
+  },
+  "/import.js": { file: "import.js", type: "text/javascript; charset=utf-8" },
+  "/import.css": { file: "import.css", type: "text/css; charset=utf-8" },
 };
 
 const SECURITY_HEADERS = {
@@ -96,15 +111,15 @@ export function createHttpServer(d: HttpDeps): Server {
   function mutationAllowed(
     req: IncomingMessage,
     res: ServerResponse,
+    contentType = "application/json",
   ): boolean {
-    // Require JSON so cross-origin browser requests require a preflight,
-    // which this server does not permit.
+    // Require a non-form content type (JSON, or octet-stream for uploads) so cross-origin
+    // browser requests require a preflight, which this server does not permit.
     if (
-      req.headers["content-type"]?.split(";")[0]?.trim() !==
-      "application/json"
+      req.headers["content-type"]?.split(";")[0]?.trim() !== contentType
     ) {
       json(res, 415, {
-        error: "Content-Type must be application/json",
+        error: `Content-Type must be ${contentType}`,
       });
       return false;
     }
@@ -286,6 +301,8 @@ export function createHttpServer(d: HttpDeps): Server {
     }
   }
 
+  const staticFiles = d.importer ? { ...STATIC, ...IMPORT_STATIC } : STATIC;
+
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://local");
@@ -309,7 +326,7 @@ export function createHttpServer(d: HttpDeps): Server {
 
       // Static frontend assets are allowed to load without the key.
       // Data APIs and event streams require the key when configured.
-      const isStaticFile = url.pathname in STATIC;
+      const isStaticFile = url.pathname in staticFiles;
 
       if (!isPost && d.accessKey && !isStaticFile) {
         const given =
@@ -322,6 +339,17 @@ export function createHttpServer(d: HttpDeps): Server {
             .writeHead(401, SECURITY_HEADERS)
             .end("Missing or wrong key.");
         }
+      }
+
+      if (d.importer && url.pathname.startsWith("/api/import/")) {
+        const handled = await handleImportRoute(d.importer, req, res, url, {
+          json,
+          guard: mutationAllowed,
+          readBody,
+          headers: SECURITY_HEADERS,
+        });
+
+        if (handled) return;
       }
 
       if (isPost && url.pathname === "/api/play") {
@@ -382,7 +410,7 @@ export function createHttpServer(d: HttpDeps): Server {
         }
       }
 
-      const file = STATIC[url.pathname];
+      const file = staticFiles[url.pathname];
 
       if (file) {
         const body = await readFile(join(PUBLIC_DIR, file.file));
@@ -390,6 +418,7 @@ export function createHttpServer(d: HttpDeps): Server {
         return void res
           .writeHead(200, {
             ...SECURITY_HEADERS,
+            ...(file.csp ? { "Content-Security-Policy": file.csp } : {}),
             "Content-Type": file.type,
           })
           .end(body);

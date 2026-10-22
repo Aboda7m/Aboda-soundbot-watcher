@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Import a sound</title>
+  <link rel="stylesheet" href="/import.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <h1>Import a sound</h1>
+    <a id="back" class="back" href="/">Back to soundboard</a>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <p id="banner" class="banner" role="alert" hidden></p>
+
+    <section id="step-pick" aria-labelledby="pick-title">
+      <h2 id="pick-title" tabindex="-1">1. Choose an audio file</h2>
+      <label class="drop" id="drop" for="file">
+        <span class="drop-main">Choose a file or drop it here</span>
+        <span class="drop-hint" id="limits">Loading limits…</span>
+      </label>
+      <input class="visually-hidden" type="file" id="file" disabled>
+    </section>
+
+    <section id="step-progress" class="card" hidden aria-labelledby="progress-title">
+      <h2 id="progress-title" class="visually-hidden">Upload and processing</h2>
+      <p id="progress-text" role="status">Uploading…</p>
+      <progress id="bar" max="100"></progress>
+    </section>
+
+    <section id="step-review" class="card" hidden aria-labelledby="review-title">
+      <h2 id="review-title" tabindex="-1">2. Preview and save</h2>
+      <audio id="player" controls preload="auto"></audio>
+      <dl id="meta" class="meta"></dl>
+      <p id="note" class="note"></p>
+
+      <form id="save-form" novalidate>
+        <label class="field" for="name">
+          <span class="field-label">Sound name</span>
+          <input id="name" type="text" maxlength="64" autocomplete="off" spellcheck="false" aria-describedby="name-help name-error">
+        </label>
+        <p id="name-help" class="hint">Letters, numbers, spaces, - and _. This is what people type with the sound command.</p>
+        <p id="name-error" class="error" role="alert" hidden></p>
+        <div class="actions">
+          <button type="submit" class="btn primary" id="save">Save to soundboard</button>
+          <button type="button" class="btn" id="discard">Discard</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="step-done" class="card" hidden aria-labelledby="done-title">
+      <h2 id="done-title" tabindex="-1">Saved</h2>
+      <p id="done-text" role="status"></p>
+      <div class="actions">
+        <button type="button" class="btn primary" id="again">Import another</button>
+        <a id="back2" class="btn" href="/">Back to soundboard</a>
+      </div>
+    </section>
+  </main>
+
+  <script src="/import.js" defer></script>
+</body>
+</html>

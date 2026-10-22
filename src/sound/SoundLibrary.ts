@@ -43,6 +43,11 @@ export class SoundLibrary {
     this.#map = next;
   }
 
+  /** Force the next call to rescan. Used after a new file is written, in case the folder's timestamp did not visibly change. */
+  invalidate(): void {
+    this.#mtime = -1;
+  }
+
   list(): string[] {
     this.#refresh();
     return [...this.#map.keys()].sort((a, b) => a.localeCompare(b));

@@ -1,9 +1,12 @@
 // Wiring only. Each piece below is independent; swap or fix one without touching the others.
 import { Events } from "discord.js";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "./config.ts";
 import { createClient, toVoiceMove } from "./discord/client.ts";
 import { registerTextCommands } from "./discord/textCommands.ts";
 import { createHttpServer } from "./http/server.ts";
+import { ImportService } from "./import/ImportService.ts";
 import { createCooldown, planIntros } from "./sound/introRules.ts";
 import { SoundLibrary } from "./sound/SoundLibrary.ts";
 import { SoundQueue } from "./sound/SoundQueue.ts";
@@ -66,6 +69,21 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 
 registerTextCommands(client, { library, queue, prefix: config.commandPrefix });
 
+// Media import page (/import). IMPORT_ENABLED=0 removes the page and its API entirely.
+const importer = config.importEnabled
+  ? new ImportService({
+      library,
+      soundsDir: config.soundsDir,
+      acceptedExtensions: config.acceptedExtensions,
+      stagingDir: join(tmpdir(), "aboda-soundbot-import"),
+      maxUploadBytes: config.importMaxUploadBytes,
+      maxDurationSec: config.importMaxDurationSec,
+      ffmpegPath: config.ffmpegPath,
+      ffprobePath: config.ffprobePath,
+      log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
+    })
+  : undefined;
+
 const server = createHttpServer({
   host: config.host,
   port: config.port,
@@ -74,6 +92,7 @@ const server = createHttpServer({
   library,
   repo,
   queue,
+  importer,
   canTarget: (guildId, channelId) =>
     !!client.guilds.cache.get(guildId)?.channels.cache.get(channelId)?.isVoiceBased(),
 });
@@ -102,6 +121,7 @@ async function shutdown(signal: string) {
   repo.flush();
   watcher.close();
   server.close();
+  importer?.close();
   await client.destroy();
   process.exit(0);
 }

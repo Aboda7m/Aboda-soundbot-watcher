@@ -45,3 +45,19 @@ Do not run the legacy bot and this one against the same db.json at the same time
     ffmpeg -i airhorn.mp3 -ar 48000 -ac 2 -c:a libopus -b:a 64k airhorn.opus
 
 Add `.opus` first in `ACCEPTED_EXTENSIONS` and it wins over the mp3/wav of the same name.
+
+## Import page: `/import`
+
+Upload an audio file, preview it, name it, and save it into `SOUNDS_DIR`. The sound is available straight away (no restart);
+reload the soundboard page to see it in the grid.
+
+- Needs `ffmpeg` and `ffprobe` on PATH (or `FFMPEG_PATH` / `FFPROBE_PATH`). `IMPORT_ENABLED=0` removes the page and API.
+- Accepted uploads: MP3, WAV, OGG, OPUS, M4A, AAC, FLAC. Limits: `IMPORT_MAX_UPLOAD_MB` (10) and `IMPORT_MAX_DURATION_SEC` (30).
+- Real MP3/WAV files are saved untouched. Anything else is converted to 48 kHz stereo MP3 (WAV if `.mp3` is not in `ACCEPTED_EXTENSIONS`).
+- Same access rules as playback: with `ACCESS_KEY` set open `/import?key=...`; beyond localhost without a key, uploads are refused.
+- Never overwrites: a name that already exists (any letter case) is refused. Names: letters, numbers, spaces, `-`, `_`.
+
+      GET  /api/import/config  limits + readiness      POST /api/import/upload   raw file body, X-Filename header
+      GET  /api/import/preview/<id>                    POST /api/import/save     {"id","name"}
+      POST /api/import/discard {"id"}
+

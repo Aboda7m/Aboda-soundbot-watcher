@@ -15,6 +15,11 @@ export interface Config {
   idleLeaveMs: number;
   countPlays: boolean;
   commandPrefix: string;
+  importEnabled: boolean;
+  importMaxUploadBytes: number;
+  importMaxDurationSec: number;
+  ffmpegPath: string;
+  ffprobePath: string;
 }
 
 const num = (v: string | undefined, fallback: number): number => {
@@ -44,5 +49,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     idleLeaveMs: num(env.IDLE_LEAVE_MS, 5000),
     countPlays: flag(env.COUNT_PLAYS, true),
     commandPrefix: env.COMMAND_PREFIX?.trim() || "!",
+    importEnabled: flag(env.IMPORT_ENABLED, true),
+    importMaxUploadBytes: Math.max(1, num(env.IMPORT_MAX_UPLOAD_MB, 10)) * 1024 * 1024,
+    importMaxDurationSec: Math.max(1, num(env.IMPORT_MAX_DURATION_SEC, 30)),
+    ffmpegPath: env.FFMPEG_PATH?.trim() || "ffmpeg",
+    ffprobePath: env.FFPROBE_PATH?.trim() || "ffprobe",
   };
 }
