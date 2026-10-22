@@ -9,7 +9,10 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch --env-file=.env src/index.ts",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "bench": "node --disable-warning=ExperimentalWarning scripts/bench.ts"
+    "bench": "node --disable-warning=ExperimentalWarning scripts/bench.ts",
+    "ytdlp:install": "node --disable-warning=ExperimentalWarning scripts/install-ytdlp.ts install",
+    "ytdlp:check": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/install-ytdlp.ts check",
+    "ytdlp:update": "node --disable-warning=ExperimentalWarning scripts/install-ytdlp.ts update"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",

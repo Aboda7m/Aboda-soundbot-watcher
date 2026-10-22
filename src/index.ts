@@ -11,6 +11,7 @@ import { createCooldown, planIntros } from "./sound/introRules.ts";
 import { SoundLibrary } from "./sound/SoundLibrary.ts";
 import { SoundQueue } from "./sound/SoundQueue.ts";
 import { SoundRepository } from "./sound/SoundRepository.ts";
+import { checkYtDlp } from "./tools/ytdlp.ts";
 import { DiscordVoiceAdapter } from "./voice/DiscordVoiceAdapter.ts";
 import { Watcher } from "./watcher/Watcher.ts";
 
@@ -103,6 +104,10 @@ const server = createHttpServer({
 server.listen(config.port, config.host, () => {
   console.log(`Voice page: http://${config.host === "0.0.0.0" ? "localhost" : config.host}:${config.port}/${config.accessKey ? "?key=…" : ""}`);
   console.log(`Sounds: ${library.list().length} found in ${config.soundsDir}`);
+  // Informational only: URL imports are not built yet, so a missing yt-dlp never stops the bot.
+  void checkYtDlp({ path: config.ytdlpPath }).then((y) =>
+    y.available ? console.log(`yt-dlp ${y.version} (${y.path})${y.problem ? `\n  Note: ${y.problem}` : ""}`) : console.log(`yt-dlp not available: ${y.problem}`),
+  );
   const loopback = ["127.0.0.1", "localhost", "::1"].includes(config.host);
   if (!loopback && !config.accessKey)
     console.warn("WARNING: listening beyond localhost with no ACCESS_KEY. Reading is open and playback is disabled.");

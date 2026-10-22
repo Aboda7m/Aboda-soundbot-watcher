@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { defaultYtDlpPath } from "./tools/ytdlp.ts";
 
 export interface Config {
   token: string;
@@ -23,6 +24,8 @@ export interface Config {
   importProcessTimeoutMs: number;
   ffmpegPath: string;
   ffprobePath: string;
+  /** portable yt-dlp: tools/yt-dlp/bin by default, YTDLP_PATH to override */
+  ytdlpPath: string;
 }
 
 const num = (v: string | undefined, fallback: number): number => {
@@ -60,5 +63,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     importProcessTimeoutMs: Math.max(1, num(env.IMPORT_PROCESS_TIMEOUT_SEC, 120)) * 1000,
     ffmpegPath: env.FFMPEG_PATH?.trim() || "ffmpeg",
     ffprobePath: env.FFPROBE_PATH?.trim() || "ffprobe",
+    ytdlpPath: env.YTDLP_PATH?.trim() ? resolve(env.YTDLP_PATH.trim()) : defaultYtDlpPath(),
   };
 }

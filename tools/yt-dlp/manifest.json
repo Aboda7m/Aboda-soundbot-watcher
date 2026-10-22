@@ -1,0 +1,35 @@
+{
+  "version": "2026.10.21",
+  "repository": "yt-dlp/yt-dlp",
+  "note": "Pinned yt-dlp release. sha256 values are filled in by `npm run ytdlp:install` (first install of a platform) or `npm run ytdlp:update -- <version>` (all platforms). Commit this file to keep installs repeatable.",
+  "assets": {
+    "win32-x64": {
+      "file": "yt-dlp.exe",
+      "sha256": "33121d192d706e62f684a06f80918e3f3a8ba52ac3a65213b6951c39c7d9f555"
+    },
+    "win32-ia32": {
+      "file": "yt-dlp_x86.exe",
+      "sha256": null
+    },
+    "win32-arm64": {
+      "file": "yt-dlp_arm64.exe",
+      "sha256": null
+    },
+    "linux-x64": {
+      "file": "yt-dlp_linux",
+      "sha256": null
+    },
+    "linux-arm64": {
+      "file": "yt-dlp_linux_aarch64",
+      "sha256": null
+    },
+    "darwin-x64": {
+      "file": "yt-dlp_macos",
+      "sha256": null
+    },
+    "darwin-arm64": {
+      "file": "yt-dlp_macos",
+      "sha256": null
+    }
+  }
+}

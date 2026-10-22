@@ -67,3 +67,26 @@ straight away (no restart); reload the soundboard page to see it in the grid.
       GET  /api/import/config   limits, formats, readiness       POST /api/import/upload   raw file body, X-Filename header
       GET  /api/import/preview/<id>                              POST /api/import/process  {"id","mode":"first"|"range"|"full","start","end"|"duration"}
       POST /api/import/save     {"id","name"}                    POST /api/import/discard  {"id"}
+
+## Portable yt-dlp (for URL imports, coming later)
+
+The bot carries its own pinned `yt-dlp` so nothing has to be installed globally. Nothing uses it for imports yet; at startup the bot only logs whether it is found.
+
+| | |
+|---|---|
+| Stored at | `tools/yt-dlp/bin/yt-dlp.exe` (Windows) or `tools/yt-dlp/bin/yt-dlp` (Linux/macOS). Git-ignored. Found relative to the project, so the working directory does not matter. |
+| Pinned version | `tools/yt-dlp/manifest.json` (`version`, plus a SHA-256 per platform). Commit this file. |
+| Source | the official `yt-dlp/yt-dlp` GitHub release for that exact version (standalone build, no Python needed) |
+
+    npm run ytdlp:install                 download the pinned version into tools/yt-dlp/bin (no-op if already installed)
+    npm run ytdlp:install -- --force      reinstall
+    npm run ytdlp:check                   show the path, pinned version and the version that actually runs
+    npm run ytdlp:update -- 2026.10.21    change the pin (reads that release's checksums); then run ytdlp:install
+
+- **Verify:** `npm run ytdlp:check` prints `Version:` from `yt-dlp --version` and warns if it differs from the pin. Or run `tools\yt-dlp\bin\yt-dlp.exe --version` yourself.
+- **Integrity:** every download is checked against a SHA-256. If the manifest has none yet for your platform, the installer takes it from the release's `SHA2-256SUMS` file, and writes it into the manifest so later installs are checked against the pinned value.
+- **No automatic updates:** nothing runs on `npm install`, and the bot never calls `yt-dlp -U`. Update only with `ytdlp:update`. Stable releases only (e.g. `2026.10.21`).
+- **Custom location:** set `YTDLP_PATH` in `.env` to use a different executable (the pin is then not compared).
+- **Windows:** if it will not start, install the Microsoft Visual C++ 2015-2022 Redistributable (x64) and check that antivirus did not quarantine the file.
+- **For later:** run it with `--ignore-config` (a `yt-dlp.conf` next to the binary is otherwise loaded). YouTube also needs a JavaScript runtime for yt-dlp; only `deno` is enabled by default, Node can be enabled with `--js-runtimes node`.
+- **License:** yt-dlp is Unlicense, but the standalone `.exe` bundles GPLv3+ code. That is why the binary is downloaded from the official release instead of being committed to the repository.

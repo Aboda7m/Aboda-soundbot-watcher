@@ -11,6 +11,9 @@ db.json
 db.json.bak
 *.json.bak
 
+# Portable yt-dlp binary (downloaded by `npm run ytdlp:install`; the manifest next to it IS tracked)
+tools/yt-dlp/bin/
+
 # Local Sounds Storage
 sounds/
 *.mp3
