@@ -103,3 +103,14 @@ input[type="text"][aria-invalid="true"] { border-color: var(--bad); }
 .btn:disabled { opacity: .55; cursor: not-allowed; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+.trim { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px 14px; margin: 0 0 16px; display: grid; gap: 8px; }
+.trim legend { padding: 0 6px; font-weight: 600; }
+.opt { display: flex; align-items: center; gap: 8px; min-height: 32px; cursor: pointer; }
+.opt input { accent-color: var(--accent); width: 18px; height: 18px; }
+.tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.range { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 4px 26px; }
+.range .hint { grid-column: 1 / -1; margin-top: 0; }
+.hint-inline { color: var(--muted); font-size: 13px; }
+.meta dd strong { color: var(--accent); }
+@media (max-width: 520px) { .range { grid-template-columns: 1fr; margin-left: 0; } }

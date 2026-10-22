@@ -17,7 +17,10 @@ export interface Config {
   commandPrefix: string;
   importEnabled: boolean;
   importMaxUploadBytes: number;
-  importMaxDurationSec: number;
+  importMaxOutputSec: number;
+  importDefaultTrimSec: number;
+  importMaxOutputBytes: number;
+  importProcessTimeoutMs: number;
   ffmpegPath: string;
   ffprobePath: string;
 }
@@ -50,8 +53,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     countPlays: flag(env.COUNT_PLAYS, true),
     commandPrefix: env.COMMAND_PREFIX?.trim() || "!",
     importEnabled: flag(env.IMPORT_ENABLED, true),
-    importMaxUploadBytes: Math.max(1, num(env.IMPORT_MAX_UPLOAD_MB, 10)) * 1024 * 1024,
-    importMaxDurationSec: Math.max(1, num(env.IMPORT_MAX_DURATION_SEC, 30)),
+    importMaxUploadBytes: Math.max(1, num(env.IMPORT_MAX_UPLOAD_MB, 100)) * 1024 * 1024,
+    importMaxOutputSec: Math.max(1, num(env.IMPORT_MAX_OUTPUT_SEC, 600)),
+    importDefaultTrimSec: Math.max(1, num(env.IMPORT_DEFAULT_TRIM_SEC, 10)),
+    importMaxOutputBytes: Math.max(1, num(env.IMPORT_MAX_OUTPUT_MB, 64)) * 1024 * 1024,
+    importProcessTimeoutMs: Math.max(1, num(env.IMPORT_PROCESS_TIMEOUT_SEC, 120)) * 1000,
     ffmpegPath: env.FFMPEG_PATH?.trim() || "ffmpeg",
     ffprobePath: env.FFPROBE_PATH?.trim() || "ffprobe",
   };

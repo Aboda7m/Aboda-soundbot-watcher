@@ -1,21 +1,31 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants, createWriteStream, readdirSync, rmSync, mkdirSync } from "node:fs";
-import { copyFile, link, rename, rm, stat, unlink } from "node:fs/promises";
+import { copyFile, link, rename, rm, stat, statfs, unlink } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { Transform, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { SoundLibrary } from "../sound/SoundLibrary.ts";
 import { checkName, cleanUploadName, suggestName } from "./names.ts";
+import { DURATION_EPSILON, resolveTrim, type TrimPlan } from "./trim.ts";
 
-/** Upload extensions accepted in Phase 1. Real validation is the ffprobe check, this only filters obvious mistakes. */
-export const UPLOAD_EXTENSIONS = [".mp3", ".wav", ".ogg", ".oga", ".opus", ".m4a", ".aac", ".flac"];
-/** Demuxers ffprobe/ffmpeg may use. Stops content-sniffing into playlist/concat/network formats. */
-const DEMUXERS = "mp3,wav,ogg,flac,mov,aac";
-const PROBE_TIMEOUT_MS = 10_000;
-const CONVERT_TIMEOUT_MS = 30_000;
+/**
+ * Upload extension -> the FFmpeg demuxer that must really be what the file is. The extension only filters obvious
+ * mistakes; the content (ffprobe + the demuxer allowlist) decides. Video containers are accepted for their audio only.
+ */
+export const EXT_DEMUXER: Record<string, string> = {
+  ".mp3": "mp3", ".wav": "wav", ".ogg": "ogg", ".oga": "ogg", ".opus": "ogg", ".flac": "flac", ".aac": "aac",
+  ".aif": "aiff", ".aiff": "aiff", ".wma": "asf", ".wmv": "asf", ".avi": "avi",
+  ".m4a": "mov", ".mp4": "mov", ".m4v": "mov", ".mov": "mov", ".3gp": "mov",
+  ".mkv": "matroska", ".mka": "matroska", ".webm": "matroska", ".weba": "matroska",
+};
+export const UPLOAD_EXTENSIONS = Object.keys(EXT_DEMUXER);
+const ALL_DEMUXERS = [...new Set(Object.values(EXT_DEMUXER))];
+
+const PROBE_TIMEOUT_MS = 15_000;
 const STAGED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const STAGED_FILE = /^[0-9a-f-]{36}\.(upload|out\.\w+)$/;
+const STAGED_FILE = /^[0-9a-f-]{36}\.(src|part|out\d+\.\w+)$/;
+const MIN_AUDIO_SEC = 0.05;
 
 export class ImportError extends Error {
   status: number;
@@ -31,20 +41,33 @@ export interface ImportOptions {
   soundsDir: string;
   acceptedExtensions: string[];
   stagingDir: string;
+  /** biggest accepted upload (the original file, audio or video) */
   maxUploadBytes: number;
-  maxDurationSec: number;
+  /** longest sound that may be saved: applies to custom ranges and to "Full audio" */
+  maxOutputSec: number;
+  /** length of the default "first N seconds" selection */
+  defaultTrimSec: number;
+  /** biggest saved file; checked against an estimate before FFmpeg runs and against the real size after */
+  maxOutputBytes: number;
+  /** upper bound for one FFmpeg run (the effective timeout scales with the selection length) */
+  processTimeoutMs: number;
   ffmpegPath: string;
   ffprobePath: string;
-  /** staged files are deleted after this long (default 30 min) */
+  /** staged imports are deleted after this long without activity (default 30 min) */
   ttlMs?: number;
-  /** staged + uploading files at once (default 8) */
+  /** pending imports (uploading + staged) at once (default 3: sources can be large) */
   maxStaged?: number;
+  /** free bytes on the filesystem holding `dir`, or null if unknown. Injectable for tests. */
+  freeSpace?(dir: string): Promise<number | null>;
   log?(message: string, err?: unknown): void;
 }
 
 interface Probe {
   format: string;
+  /** codec of the audio stream that will be used */
   codec: string;
+  /** ffprobe stream index of that audio stream */
+  audioIndex: number | null;
   durationSec: number | null;
   sampleRate: number | null;
   channels: number | null;
@@ -54,48 +77,89 @@ interface Probe {
 
 interface Staged {
   id: string;
-  path: string; // processed result, the file that gets saved
+  srcPath: string; // the original upload, kept so the trim can be changed
+  probe: Probe;
+  outPath: string; // current rendered result, the file that gets previewed and saved
   ext: string;
   mime: string;
   sizeBytes: number;
-  createdAt: number;
+  version: number;
+  touchedAt: number;
+  busy: boolean; // rendering
   saving: boolean;
+}
+
+export interface RenderResult {
+  /** increases with every render; lets the page avoid a cached preview */
+  version: number;
+  mode: TrimPlan["mode"];
+  startSec: number;
+  endSec: number;
+  durationSec: number;
+  extension: string;
+  sizeBytes: number;
+  sampleRate: number | null;
+  channels: number | null;
+  converted: boolean;
+  note: string;
 }
 
 export interface StagedInfo {
   id: string;
   suggestedName: string;
   nameTaken: boolean;
-  original: { fileName: string; sizeBytes: number; format: string; codec: string };
-  result: {
-    extension: string;
+  original: {
+    fileName: string;
     sizeBytes: number;
-    durationSec: number;
-    sampleRate: number | null;
-    channels: number | null;
-    converted: boolean;
-    note: string;
+    format: string;
+    codec: string;
+    durationSec: number | null;
+    hasVideo: boolean;
+    audioStreams: number;
   };
+  result: RenderResult;
 }
 
 const MIME: Record<string, string> = { ".mp3": "audio/mpeg", ".wav": "audio/wav" };
 const lower = (s: string) => s.normalize("NFC").toLowerCase();
+const fmtSec = (s: number) => s.toFixed(3);
 
 function run(cmd: string, args: string[], timeout: number): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile(
       cmd,
       args,
-      { timeout, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+      { timeout, killSignal: "SIGKILL", maxBuffer: 8 * 1024 * 1024, windowsHide: true },
       (err, stdout, stderr) => (err ? reject(Object.assign(err, { stderr })) : resolve({ stdout, stderr })),
     );
   });
 }
 
+/** "D  mov,mp4,m4a  QuickTime" style listings -> set of every name. */
+function parseNames(text: string, flagPattern: RegExp, mustHave: string): Set<string> {
+  const names = new Set<string>();
+  for (const line of text.split("\n")) {
+    const t = line.trim().split(/\s+/);
+    if (t.length < 2 || !flagPattern.test(t[0]!) || !t[0]!.includes(mustHave)) continue;
+    for (const n of t[1]!.split(",")) names.add(n);
+  }
+  return names;
+}
+
+async function defaultFreeSpace(dir: string): Promise<number | null> {
+  try {
+    const s = await statfs(dir);
+    return Number(s.bavail) * Number(s.bsize);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Phase 1 import pipeline: stage (upload + validate + convert if needed) -> preview -> save.
- * Staged files live in a private temp folder under random ids; the client never supplies a path.
- * Only one ffprobe/ffmpeg job runs at a time, and every job has a timeout and a duration cap.
+ * Import pipeline: stage (upload + validate + default trim) -> optional re-trim -> preview -> save.
+ * The original upload stays in a private temp folder under a random id until saved, discarded or expired;
+ * every render is derived from it. The client never supplies a path.
+ * Only one ffprobe/ffmpeg job runs at a time, and every job has a timeout and an output cap.
  */
 export class ImportService {
   #o: ImportOptions;
@@ -103,13 +167,17 @@ export class ImportService {
   #uploading = 0;
   #busy = false;
   #toolsOk = false;
+  #demuxers: string[] = ALL_DEMUXERS;
+  #extensions: string[] = UPLOAD_EXTENSIONS;
   #timer: NodeJS.Timeout;
   #outExt: string | null;
+  #wantsOut: boolean;
 
   constructor(opts: ImportOptions) {
-    this.#o = opts;
+    this.#o = { ...opts, defaultTrimSec: Math.min(opts.defaultTrimSec, opts.maxOutputSec) };
     const accepted = opts.acceptedExtensions.map((e) => e.toLowerCase());
-    this.#outExt = accepted.includes(".mp3") ? ".mp3" : accepted.includes(".wav") ? ".wav" : null;
+    this.#wantsOut = accepted.includes(".mp3") || accepted.includes(".wav");
+    this.#outExt = this.#wantsOut ? (accepted.includes(".mp3") ? ".mp3" : ".wav") : null;
     mkdirSync(opts.stagingDir, { recursive: true });
     // Remove leftovers of a previous run. Only files that match our own naming are touched.
     for (const f of readdirSync(opts.stagingDir)) {
@@ -122,15 +190,16 @@ export class ImportService {
   limits() {
     return {
       maxUploadBytes: this.#o.maxUploadBytes,
-      maxDurationSec: this.#o.maxDurationSec,
-      extensions: UPLOAD_EXTENSIONS,
+      maxOutputSec: this.#o.maxOutputSec,
+      defaultTrimSec: this.#o.defaultTrimSec,
+      extensions: this.#extensions,
       outputExtension: this.#outExt,
     };
   }
 
   /** Is the feature usable right now? Re-checked each call until it succeeds, so installing ffmpeg needs no restart. */
   async status(): Promise<{ ready: boolean; problem?: string }> {
-    if (!this.#outExt) return { ready: false, problem: "ACCEPTED_EXTENSIONS must include .mp3 or .wav for imports to work." };
+    if (!this.#wantsOut) return { ready: false, problem: "ACCEPTED_EXTENSIONS must include .mp3 or .wav for imports to work." };
     try {
       await this.#ensureTools();
       return { ready: true };
@@ -139,6 +208,7 @@ export class ImportService {
     }
   }
 
+  /** Checks ffprobe/ffmpeg exist and that this build can read the formats and write the output format we need. */
   async #ensureTools(): Promise<void> {
     if (this.#toolsOk) return;
     for (const [cmd, label] of [[this.#o.ffprobePath, "ffprobe"], [this.#o.ffmpegPath, "ffmpeg"]] as const) {
@@ -149,91 +219,131 @@ export class ImportService {
         throw new ImportError(503, `${label} was not found on the server. Install FFmpeg (or set FFMPEG_PATH / FFPROBE_PATH).`);
       }
     }
+    let demuxers: Set<string>;
+    let encoders: Set<string>;
+    try {
+      demuxers = parseNames((await run(this.#o.ffmpegPath, ["-hide_banner", "-demuxers"], 10_000)).stdout, /^[DE]+$/, "D");
+      encoders = parseNames((await run(this.#o.ffmpegPath, ["-hide_banner", "-encoders"], 10_000)).stdout, /^[AVS][.\w]{5}$/, "A");
+    } catch (err) {
+      this.#o.log?.("ffmpeg capability check failed", err);
+      throw new ImportError(503, "Could not ask FFmpeg which formats it supports.");
+    }
+    const demux = ALL_DEMUXERS.filter((d) => demuxers.has(d));
+    if (!demux.length) throw new ImportError(503, "This FFmpeg build cannot read any of the supported audio/video formats.");
+    const accepted = this.#o.acceptedExtensions.map((e) => e.toLowerCase());
+    let out: string | null = null;
+    if (accepted.includes(".mp3") && encoders.has("libmp3lame")) out = ".mp3";
+    else if (accepted.includes(".wav") && encoders.has("pcm_s16le")) out = ".wav";
+    if (!out)
+      throw new ImportError(
+        503,
+        accepted.includes(".mp3")
+          ? "This FFmpeg build has no MP3 encoder (libmp3lame). Install a full FFmpeg build or add .wav to ACCEPTED_EXTENSIONS."
+          : "This FFmpeg build has no WAV (pcm_s16le) encoder.",
+      );
+    this.#demuxers = demux;
+    this.#extensions = UPLOAD_EXTENSIONS.filter((e) => demux.includes(EXT_DEMUXER[e]!));
+    this.#outExt = out;
     this.#toolsOk = true;
   }
 
-  /** Receive an upload, validate it and prepare the version that would be saved. */
+  /** Receive an upload, validate it, and render the default selection (the first N seconds). */
   async stage(body: Readable, rawFileName: string, declaredLength: number | null): Promise<StagedInfo> {
     this.#sweep();
     const fileName = cleanUploadName(rawFileName);
+    await this.#ensureTools();
     const ext = extname(fileName).toLowerCase();
-    if (!UPLOAD_EXTENSIONS.includes(ext))
-      throw new ImportError(415, `Unsupported file type${ext ? ` "${ext}"` : ""}. Supported: ${UPLOAD_EXTENSIONS.join(", ")}.`);
+    if (!this.#extensions.includes(ext))
+      throw new ImportError(415, `Unsupported file type${ext ? ` "${ext}"` : ""}. Supported: ${this.#extensions.join(", ")}.`);
     if (declaredLength !== null && declaredLength <= 0) throw new ImportError(400, "The file is empty.");
     if (declaredLength !== null && declaredLength > this.#o.maxUploadBytes) throw this.#tooLarge();
-    if (!this.#outExt) throw new ImportError(503, "ACCEPTED_EXTENSIONS must include .mp3 or .wav for imports to work.");
-    if (this.#staged.size + this.#uploading >= (this.#o.maxStaged ?? 8))
+    if (this.#staged.size + this.#uploading >= (this.#o.maxStaged ?? 3))
       throw new ImportError(429, "Too many pending imports. Save or discard one first.");
-    await this.#ensureTools();
+    await this.#checkDisk(declaredLength);
 
     const id = randomUUID();
-    const inPath = join(this.#o.stagingDir, `${id}.upload`);
-    let outPath: string | null = null;
+    const srcPath = join(this.#o.stagingDir, `${id}.src`);
     this.#uploading++;
     try {
-      await this.#receive(body, inPath);
-      const info = await this.#exclusive(async () => {
-        const probe = await this.#probe(inPath);
-        this.#validate(probe);
-        const keep = this.#keepExtension(probe);
-        const finalExt = keep ?? this.#outExt!;
-        outPath = join(this.#o.stagingDir, `${id}.out${finalExt}`);
-        let note: string;
-        if (keep) {
-          await rename(inPath, outPath);
-          note = `Already ${keep.slice(1).toUpperCase()}, so it was kept exactly as uploaded.`;
-        } else {
-          await this.#convert(inPath, outPath, finalExt);
-          note = `Converted from ${probe.codec.toUpperCase() || probe.format.toUpperCase()} to ${finalExt.slice(1).toUpperCase()} (48 kHz stereo) so the soundboard can play it.`;
-        }
-        const after = keep ? probe : await this.#probe(outPath);
-        this.#validate(after);
-        const size = (await stat(outPath)).size;
-        return { probe, after, keep, finalExt, size, note, outPath };
+      await this.#receive(body, srcPath);
+      return await this.#exclusive(async () => {
+        const probe = await this.#probe(srcPath);
+        this.#validateSource(probe);
+        const trim = resolveTrim({ mode: "first" }, probe.durationSec, this.#trimLimits());
+        if (!trim.ok) throw new ImportError(422, trim.error);
+        const r = await this.#render(id, srcPath, probe, trim.plan, 1);
+        this.#staged.set(id, {
+          id, srcPath, probe, outPath: r.path, ext: r.result.extension, mime: MIME[r.result.extension] ?? "application/octet-stream",
+          sizeBytes: r.result.sizeBytes, version: 1, touchedAt: Date.now(), busy: false, saving: false,
+        });
+        const suggested = suggestName(fileName);
+        return {
+          id,
+          suggestedName: suggested,
+          nameTaken: suggested !== "" && this.#taken(suggested),
+          original: {
+            fileName,
+            sizeBytes: (await stat(srcPath)).size,
+            format: probe.format,
+            codec: probe.codec,
+            durationSec: probe.durationSec,
+            hasVideo: probe.hasVideo,
+            audioStreams: probe.audioStreams,
+          },
+          result: r.result,
+        };
       });
-      const sizeIn = declaredLength ?? info.size;
-      this.#staged.set(id, {
-        id, path: info.outPath, ext: info.finalExt, mime: MIME[info.finalExt] ?? "application/octet-stream",
-        sizeBytes: info.size, createdAt: Date.now(), saving: false,
-      });
-      const suggested = suggestName(fileName);
-      return {
-        id,
-        suggestedName: suggested,
-        nameTaken: suggested !== "" && this.#taken(suggested),
-        original: { fileName, sizeBytes: sizeIn, format: info.probe.format, codec: info.probe.codec },
-        result: {
-          extension: info.finalExt,
-          sizeBytes: info.size,
-          durationSec: info.after.durationSec ?? 0,
-          sampleRate: info.after.sampleRate,
-          channels: info.after.channels,
-          converted: !info.keep,
-          note: info.note,
-        },
-      };
     } catch (err) {
-      await rm(inPath, { force: true });
-      if (outPath) await rm(outPath, { force: true });
+      await rm(srcPath, { force: true });
       throw err;
     } finally {
       this.#uploading--;
     }
   }
 
-  /** Path + type of a staged result for the preview player, or null. */
-  preview(id: string): { path: string; mime: string; sizeBytes: number } | null {
-    const s = STAGED_ID.test(id) ? this.#staged.get(id) : undefined;
-    return s ? { path: s.path, mime: s.mime, sizeBytes: s.sizeBytes } : null;
+  /** Re-render a staged import with a different selection. The previous render is replaced only if the new one succeeds. */
+  async process(id: string, rawRequest: unknown): Promise<RenderResult> {
+    const s = this.#get(id);
+    if (s.saving || s.busy) throw new ImportError(409, "This import is busy. Try again in a moment.");
+    s.touchedAt = Date.now();
+    return await this.#exclusive(async () => {
+      s.busy = true;
+      let fresh: { path: string; result: RenderResult } | null = null;
+      try {
+        const trim = resolveTrim(rawRequest, s.probe.durationSec, this.#trimLimits());
+        if (!trim.ok) throw new ImportError(400, trim.error);
+        fresh = await this.#render(id, s.srcPath, s.probe, trim.plan, s.version + 1);
+        if (this.#staged.get(id) !== s) throw new ImportError(404, "That import expired. Upload the file again.");
+        const old = s.outPath;
+        s.outPath = fresh.path;
+        s.ext = fresh.result.extension;
+        s.mime = MIME[s.ext] ?? "application/octet-stream";
+        s.sizeBytes = fresh.result.sizeBytes;
+        s.version += 1;
+        s.touchedAt = Date.now();
+        await rm(old, { force: true }).catch(() => {});
+        return fresh.result;
+      } catch (err) {
+        if (fresh && s.outPath !== fresh.path) await rm(fresh.path, { force: true });
+        throw err;
+      } finally {
+        s.busy = false;
+      }
+    });
   }
 
-  /** Move a staged result into the sounds folder under a validated name. Never overwrites. */
-  async save(id: string, rawName: unknown): Promise<{ name: string; file: string }> {
+  /** Path + type of the current render for the preview player, or null. */
+  preview(id: string): { path: string; mime: string; sizeBytes: number } | null {
     const s = STAGED_ID.test(id) ? this.#staged.get(id) : undefined;
-    if (!s) throw new ImportError(404, "That import expired or doesn't exist. Upload the file again.");
+    return s ? { path: s.outPath, mime: s.mime, sizeBytes: s.sizeBytes } : null;
+  }
+
+  /** Move the current render into the sounds folder under a validated name. Never overwrites. */
+  async save(id: string, rawName: unknown): Promise<{ name: string; file: string }> {
+    const s = this.#get(id);
     const checked = checkName(rawName);
     if (!checked.ok) throw new ImportError(400, checked.error);
-    if (s.saving) throw new ImportError(409, "This import is already being saved.");
+    if (s.saving || s.busy) throw new ImportError(409, "This import is busy. Try again in a moment.");
     const { name } = checked;
     if (this.#taken(name)) throw new ImportError(409, `A sound named "${name}" already exists. Choose another name.`);
 
@@ -248,7 +358,7 @@ export class ImportService {
         throw new ImportError(500, "The sounds folder is missing on the server. Check SOUNDS_DIR.");
       }
       try {
-        await copyFile(s.path, tmpPath, constants.COPYFILE_EXCL);
+        await copyFile(s.outPath, tmpPath, constants.COPYFILE_EXCL);
         try {
           await link(tmpPath, finalPath); // atomic and refuses to replace an existing file
         } catch (err) {
@@ -269,7 +379,7 @@ export class ImportService {
       }
       this.#o.library.invalidate(); // new file is visible immediately, even on filesystems with coarse timestamps
       this.#staged.delete(id);
-      await rm(s.path, { force: true });
+      this.#dispose(s);
       return { name, file: `${name}${s.ext}` };
     } finally {
       s.saving = false;
@@ -278,19 +388,34 @@ export class ImportService {
 
   discard(id: string): boolean {
     const s = STAGED_ID.test(id) ? this.#staged.get(id) : undefined;
-    if (!s || s.saving) return false;
+    if (!s || s.saving || s.busy) return false;
     this.#staged.delete(id);
-    rmSync(s.path, { force: true });
+    this.#dispose(s);
     return true;
   }
 
   close(): void {
     clearInterval(this.#timer);
-    for (const s of this.#staged.values()) rmSync(s.path, { force: true });
+    for (const s of this.#staged.values()) this.#dispose(s);
     this.#staged.clear();
   }
 
   // ---------------------------------------------------------------------------------------------
+
+  #trimLimits() {
+    return { defaultSec: this.#o.defaultTrimSec, maxOutputSec: this.#o.maxOutputSec };
+  }
+
+  #get(id: string): Staged {
+    const s = STAGED_ID.test(id) ? this.#staged.get(id) : undefined;
+    if (!s) throw new ImportError(404, "That import expired or doesn't exist. Upload the file again.");
+    return s;
+  }
+
+  #dispose(s: Staged): void {
+    rmSync(s.srcPath, { force: true });
+    rmSync(s.outPath, { force: true });
+  }
 
   #taken(name: string): boolean {
     const l = lower(name);
@@ -300,15 +425,25 @@ export class ImportService {
   #sweep(now = Date.now()): void {
     const ttl = this.#o.ttlMs ?? 30 * 60_000;
     for (const [id, s] of this.#staged) {
-      if (!s.saving && now - s.createdAt > ttl) {
+      if (!s.saving && !s.busy && now - s.touchedAt > ttl) {
         this.#staged.delete(id);
-        rmSync(s.path, { force: true });
+        this.#dispose(s);
       }
     }
   }
 
   #tooLarge(): ImportError {
-    return new ImportError(413, `File is too large. The limit is ${(this.#o.maxUploadBytes / 1024 / 1024).toFixed(0)} MB.`);
+    const mb = this.#o.maxUploadBytes / 1024 / 1024;
+    return new ImportError(413, `File is too large. The limit is ${mb >= 10 ? mb.toFixed(0) : mb.toFixed(1)} MB.`);
+  }
+
+  async #checkDisk(declared: number | null): Promise<void> {
+    const free = await (this.#o.freeSpace ?? defaultFreeSpace)(this.#o.stagingDir);
+    const need = (declared ?? this.#o.maxUploadBytes) + this.#o.maxOutputBytes + 16 * 1024 * 1024;
+    if (free !== null && free < need) {
+      this.#o.log?.(`Import refused: ${free} bytes free, ${need} needed`);
+      throw new ImportError(507, "The server doesn't have enough free disk space for this import.");
+    }
   }
 
   async #receive(body: Readable, path: string): Promise<void> {
@@ -346,14 +481,14 @@ export class ImportService {
     try {
       ({ stdout } = await run(
         this.#o.ffprobePath,
-        ["-v", "error", "-hide_banner", "-protocol_whitelist", "file", "-format_whitelist", DEMUXERS,
+        ["-v", "error", "-hide_banner", "-protocol_whitelist", "file", "-format_whitelist", this.#demuxers.join(","),
           "-print_format", "json", "-show_format", "-show_streams", path],
         PROBE_TIMEOUT_MS,
       ));
     } catch (err) {
       this.#o.log?.("ffprobe rejected a file", err);
       if ((err as { killed?: boolean }).killed) throw new ImportError(422, "Reading the file took too long, so it was rejected.");
-      throw new ImportError(422, "This doesn't look like a valid audio file (it couldn't be read as MP3, WAV, OGG, Opus, M4A, AAC or FLAC).");
+      throw new ImportError(422, "This doesn't look like a valid audio or video file (or it is damaged, or in a format that isn't supported).");
     }
     let data: { format?: Record<string, string>; streams?: Array<Record<string, unknown>> };
     try {
@@ -361,62 +496,124 @@ export class ImportService {
     } catch {
       throw new ImportError(422, "The file's audio information could not be read.");
     }
+    const num = (v: unknown): number | null => {
+      const n = typeof v === "string" || typeof v === "number" ? Number(v) : NaN;
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
     const streams = data.streams ?? [];
     const audio = streams.filter((s) => s.codec_type === "audio");
     const hasVideo = streams.some(
       (s) => s.codec_type === "video" && !((s.disposition as Record<string, number> | undefined)?.attached_pic),
     );
-    const a = audio[0] ?? {};
-    const num = (v: unknown): number | null => {
-      const n = typeof v === "string" || typeof v === "number" ? Number(v) : NaN;
-      return Number.isFinite(n) && n > 0 ? n : null;
-    };
+    // first audio stream FFmpeg can actually describe (it has a codec and a sample rate)
+    const usable = audio.find((s) => typeof s.codec_name === "string" && s.codec_name !== "none" && num(s.sample_rate) !== null);
     return {
       format: (data.format?.format_name ?? "").split(",")[0] ?? "",
-      codec: typeof a.codec_name === "string" ? a.codec_name : "",
-      durationSec: num(data.format?.duration) ?? num(a.duration),
-      sampleRate: num(a.sample_rate),
-      channels: num(a.channels),
+      codec: typeof usable?.codec_name === "string" ? usable.codec_name : "",
+      audioIndex: typeof usable?.index === "number" ? usable.index : null,
+      durationSec: num(data.format?.duration) ?? num(usable?.duration),
+      sampleRate: num(usable?.sample_rate),
+      channels: num(usable?.channels),
       audioStreams: audio.length,
       hasVideo,
     };
   }
 
-  #validate(p: Probe): void {
-    if (p.audioStreams < 1) throw new ImportError(422, "No audio was found in this file.");
-    if (p.hasVideo) throw new ImportError(422, "This file contains video. Importing audio from video files isn't supported yet.");
-    if (p.durationSec !== null) {
-      if (p.durationSec < 0.05) throw new ImportError(422, "The audio is empty or too short to play.");
-      if (p.durationSec > this.#o.maxDurationSec)
-        throw new ImportError(422, `The audio is ${p.durationSec.toFixed(1)} s long. The limit is ${this.#o.maxDurationSec} s.`);
-    }
+  /** There is no length limit on the source (that is what trimming is for); it only needs a usable audio track. */
+  #validateSource(p: Probe): void {
+    if (p.audioStreams < 1)
+      throw new ImportError(422, p.hasVideo ? "This video has no audio track, so there is nothing to import." : "No audio was found in this file.");
+    if (p.audioIndex === null) throw new ImportError(422, "The audio track in this file can't be read (unknown codec).");
+    if (p.durationSec !== null && p.durationSec < MIN_AUDIO_SEC) throw new ImportError(422, "The audio is empty or too short to play.");
   }
 
-  /** Keep the upload untouched only when it is really MP3 or WAV (by content), that format is accepted, and the length is known. */
+  /** Keep the source untouched only if it is really a plain MP3/WAV in an accepted extension, within the length cap, with nothing to trim. */
   #keepExtension(p: Probe): string | null {
-    if (p.durationSec === null) return null;
+    if (p.hasVideo || p.audioStreams !== 1 || p.durationSec === null || p.durationSec > this.#o.maxOutputSec + DURATION_EPSILON) return null;
     const accepted = this.#o.acceptedExtensions.map((e) => e.toLowerCase());
     if (p.format === "mp3" && accepted.includes(".mp3")) return ".mp3";
     if (p.format === "wav" && accepted.includes(".wav")) return ".wav";
     return null;
   }
 
-  async #convert(inPath: string, outPath: string, ext: string): Promise<void> {
+  /**
+   * Produce one result file from the source. FFmpeg writes to `<id>.part` and the file is renamed into place only after
+   * it passed the output checks, so an aborted or failed run never leaves something the soundboard (or save) could pick up.
+   */
+  async #render(id: string, srcPath: string, probe: Probe, plan: TrimPlan, version: number) {
+    const keep = plan.needsTrim ? null : this.#keepExtension(probe);
+    const ext = keep ?? this.#outExt!;
+    const outPath = join(this.#o.stagingDir, `${id}.out${version}${ext}`);
+    const partPath = join(this.#o.stagingDir, `${id}.part`);
+    try {
+      if (keep) {
+        try {
+          await link(srcPath, outPath); // same bytes, no extra disk
+        } catch {
+          await copyFile(srcPath, partPath);
+          await rename(partPath, outPath);
+        }
+      } else {
+        await this.#convert(srcPath, partPath, outPath, probe, plan, ext);
+      }
+      const after = keep ? probe : await this.#probe(outPath);
+      const dur = after.durationSec;
+      if (after.audioStreams < 1 || dur === null || dur < MIN_AUDIO_SEC)
+        throw new ImportError(422, "The selected part contains no audio. The range may start after the audio ends.");
+      if (dur > this.#o.maxOutputSec + 0.5)
+        throw new ImportError(422, `The result is longer than ${this.#o.maxOutputSec} s, the limit for a saved sound. Choose a shorter range.`);
+      const size = (await stat(outPath)).size;
+      if (size > this.#o.maxOutputBytes)
+        throw new ImportError(422, `The result is ${(size / 1024 / 1024).toFixed(0)} MB, over the ${(this.#o.maxOutputBytes / 1024 / 1024).toFixed(0)} MB limit. Choose a shorter range.`);
+      const result: RenderResult = {
+        version,
+        mode: plan.mode,
+        startSec: plan.startSec,
+        endSec: plan.startSec + dur,
+        durationSec: dur,
+        extension: ext,
+        sizeBytes: size,
+        sampleRate: after.sampleRate,
+        channels: after.channels,
+        converted: !keep,
+        note: keep
+          ? `Already ${ext.slice(1).toUpperCase()}, so it was kept exactly as uploaded.`
+          : `Converted to ${ext.slice(1).toUpperCase()} (48 kHz stereo), the format the soundboard plays.`,
+      };
+      return { path: outPath, result };
+    } catch (err) {
+      await rm(outPath, { force: true });
+      await rm(partPath, { force: true });
+      throw err;
+    }
+  }
+
+  async #convert(srcPath: string, partPath: string, outPath: string, probe: Probe, plan: TrimPlan, ext: string): Promise<void> {
+    // Never ask FFmpeg for more than the cap, even when the header said the file is shorter (headers can lie).
+    const limit = plan.lengthSec ?? this.#o.maxOutputSec + 1;
+    const bytesPerSec = ext === ".mp3" ? 40_000 : 192_000; // worst-case estimates for q2 MP3 / 48 kHz stereo 16-bit WAV
+    if (limit * bytesPerSec > this.#o.maxOutputBytes)
+      throw new ImportError(422, `That selection would be too large as ${ext.slice(1).toUpperCase()}. Choose a shorter range.`);
     const codec = ext === ".mp3" ? ["-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3"] : ["-c:a", "pcm_s16le", "-f", "wav"];
+    // execFile only accepts a whole number of milliseconds, and `limit` is usually fractional (e.g. a 22.667 s file)
+    const timeout = Math.ceil(Math.min(this.#o.processTimeoutMs, Math.max(30_000, 20_000 + limit * 500)));
     try {
       await run(
         this.#o.ffmpegPath,
         ["-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-          "-protocol_whitelist", "file", "-format_whitelist", DEMUXERS, "-i", inPath,
-          "-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1",
-          "-t", String(this.#o.maxDurationSec + 1), // hard stop even if the header lied about the length
-          "-ar", "48000", "-ac", "2", ...codec, outPath],
-        CONVERT_TIMEOUT_MS,
+          "-protocol_whitelist", "file", "-format_whitelist", this.#demuxers.join(","), "-threads", "1",
+          ...(plan.startSec > 0 ? ["-ss", fmtSec(plan.startSec)] : []), // before -i: seeks instead of decoding from the start
+          "-i", srcPath,
+          "-map", `0:${probe.audioIndex}`, "-vn", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1",
+          "-t", fmtSec(limit),
+          "-ar", "48000", "-ac", "2", ...codec, partPath],
+        timeout,
       );
     } catch (err) {
       this.#o.log?.("ffmpeg conversion failed", err);
-      if ((err as { killed?: boolean }).killed) throw new ImportError(422, "Converting the file took too long, so it was stopped.");
-      throw new ImportError(422, "FFmpeg could not convert this file. It may be damaged or use an unsupported codec.");
+      if ((err as { killed?: boolean }).killed) throw new ImportError(422, "Processing took too long, so it was stopped. Try a shorter selection.");
+      throw new ImportError(422, "FFmpeg could not process this file. It may be damaged or use an unsupported codec.");
     }
+    await rename(partPath, outPath);
   }
 }

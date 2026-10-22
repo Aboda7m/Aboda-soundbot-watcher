@@ -19,7 +19,7 @@
     <p id="banner" class="banner" role="alert" hidden></p>
 
     <section id="step-pick" aria-labelledby="pick-title">
-      <h2 id="pick-title" tabindex="-1">1. Choose an audio file</h2>
+      <h2 id="pick-title" tabindex="-1">1. Choose an audio or video file</h2>
       <label class="drop" id="drop" for="file">
         <span class="drop-main">Choose a file or drop it here</span>
         <span class="drop-hint" id="limits">Loading limits…</span>
@@ -37,7 +37,26 @@
       <h2 id="review-title" tabindex="-1">2. Preview and save</h2>
       <audio id="player" controls preload="auto"></audio>
       <dl id="meta" class="meta"></dl>
+      <p id="video-note" class="note" hidden>This is a video. Only its audio is used.</p>
       <p id="note" class="note"></p>
+
+      <fieldset class="trim" id="trim">
+        <legend>What to keep</legend>
+        <label class="opt"><input type="radio" name="mode" value="first" checked> <span id="first-label">First 10 seconds</span> <span class="tag">default</span></label>
+        <label class="opt"><input type="radio" name="mode" value="range"> Custom range</label>
+        <div id="range-fields" class="range" hidden>
+          <label class="field" for="r-start"><span class="field-label">Start</span><input id="r-start" type="text" inputmode="decimal" autocomplete="off" aria-describedby="range-help"></label>
+          <label class="field" for="r-end"><span class="field-label">End</span><input id="r-end" type="text" inputmode="decimal" autocomplete="off" aria-describedby="range-help"></label>
+          <label class="field" for="r-len"><span class="field-label">Length</span><input id="r-len" type="text" inputmode="decimal" autocomplete="off" aria-describedby="range-help"></label>
+          <p id="range-help" class="hint">Seconds (12.5) or minutes:seconds (1:05). Change End or Length and the other follows.</p>
+        </div>
+        <label class="opt"><input type="radio" name="mode" value="full" id="mode-full"> Full audio <span id="full-hint" class="hint-inline"></span></label>
+        <p id="trim-error" class="error" role="alert" hidden></p>
+        <div class="actions">
+          <button type="button" class="btn" id="apply">Update preview</button>
+          <span id="trim-status" class="hint-inline" role="status"></span>
+        </div>
+      </fieldset>
 
       <form id="save-form" novalidate>
         <label class="field" for="name">

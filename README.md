@@ -48,16 +48,22 @@ Add `.opus` first in `ACCEPTED_EXTENSIONS` and it wins over the mp3/wav of the s
 
 ## Import page: `/import`
 
-Upload an audio file, preview it, name it, and save it into `SOUNDS_DIR`. The sound is available straight away (no restart);
-reload the soundboard page to see it in the grid.
+Upload an audio **or video** file, choose what to keep, preview it, name it, and save it into `SOUNDS_DIR`. The sound is available
+straight away (no restart); reload the soundboard page to see it in the grid.
 
 - Needs `ffmpeg` and `ffprobe` on PATH (or `FFMPEG_PATH` / `FFPROBE_PATH`). `IMPORT_ENABLED=0` removes the page and API.
-- Accepted uploads: MP3, WAV, OGG, OPUS, M4A, AAC, FLAC. Limits: `IMPORT_MAX_UPLOAD_MB` (10) and `IMPORT_MAX_DURATION_SEC` (30).
-- Real MP3/WAV files are saved untouched. Anything else is converted to 48 kHz stereo MP3 (WAV if `.mp3` is not in `ACCEPTED_EXTENSIONS`).
+  The page checks what your FFmpeg build can read/write and only offers those formats.
+- Accepted: MP3, WAV, OGG/Opus, FLAC, AAC, AIFF, WMA, M4A, MP4, MOV, MKV, WebM, AVI, 3GP and similar. The file's real content is checked, not its name.
+  For video only the audio track is used; a file with no audio track is refused.
+- **What to keep:** by default the first `IMPORT_DEFAULT_TRIM_SEC` seconds (10). The user can instead pick a custom range (start + end, or start + length)
+  or "Full audio". Long sources are fine; the saved sound is limited to `IMPORT_MAX_OUTPUT_SEC` (600) and `IMPORT_MAX_OUTPUT_MB` (64).
+  The page shows the original length and the length that will be saved, and Save is only enabled while the preview matches the chosen settings.
+- Real MP3/WAV files that need no trimming are saved untouched. Everything else becomes 48 kHz stereo MP3 (WAV if `.mp3` is not in `ACCEPTED_EXTENSIONS`).
+- Limits: `IMPORT_MAX_UPLOAD_MB` (100) for the original file, one FFmpeg job at a time, a timeout per job (`IMPORT_PROCESS_TIMEOUT_SEC`),
+  at most 3 pending imports, a free-disk-space check, and staged files are deleted after 30 minutes.
 - Same access rules as playback: with `ACCESS_KEY` set open `/import?key=...`; beyond localhost without a key, uploads are refused.
 - Never overwrites: a name that already exists (any letter case) is refused. Names: letters, numbers, spaces, `-`, `_`.
 
-      GET  /api/import/config  limits + readiness      POST /api/import/upload   raw file body, X-Filename header
-      GET  /api/import/preview/<id>                    POST /api/import/save     {"id","name"}
-      POST /api/import/discard {"id"}
-
+      GET  /api/import/config   limits, formats, readiness       POST /api/import/upload   raw file body, X-Filename header
+      GET  /api/import/preview/<id>                              POST /api/import/process  {"id","mode":"first"|"range"|"full","start","end"|"duration"}
+      POST /api/import/save     {"id","name"}                    POST /api/import/discard  {"id"}

@@ -97,6 +97,21 @@ export async function handleImportRoute(
     return true;
   }
 
+  if (pathname === "/api/import/process") {
+    if (!kit.guard(req, res, "application/json")) return true;
+    const body = await readJson();
+    if (!body || typeof body.id !== "string") {
+      kit.json(res, 400, { ok: false, error: "Body must be JSON with id and the trim settings." });
+      return true;
+    }
+    try {
+      kit.json(res, 200, { ok: true, result: await importer.process(body.id, body) });
+    } catch (err) {
+      fail(err);
+    }
+    return true;
+  }
+
   if (pathname === "/api/import/discard") {
     if (!kit.guard(req, res, "application/json")) return true;
     const body = await readJson();
