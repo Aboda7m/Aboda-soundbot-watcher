@@ -48,8 +48,8 @@ export function registerTextCommands(
           if (importCmd.startSec !== undefined && importCmd.endSec !== undefined) {
             await importer.process(staged.id, {
               mode: "range",
-              startSec: importCmd.startSec,
-              endSec: importCmd.endSec,
+              start: importCmd.startSec,
+              end: importCmd.endSec,
             });
           }
 
