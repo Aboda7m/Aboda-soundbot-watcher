@@ -316,9 +316,19 @@ export class ImportService {
     }
     await this.#checkDisk(null);
 
+    const ytDlpPath = defaultYtDlpPath();
+
+    // Fetch the real YouTube video title first
+    let videoTitle = "youtube_sound";
+    try {
+      const titleRes = await run(ytDlpPath, ["--no-config", "--print", "title", validatedUrl.toString()], 15_000);
+      videoTitle = titleRes.stdout.trim() || "youtube_sound";
+    } catch {
+      // Fallback if title fetch fails
+    }
+
     const id = randomUUID();
     const outTemplate = join(this.#o.stagingDir, `${id}.src.%(ext)s`);
-    const ytDlpPath = defaultYtDlpPath();
 
     this.#uploading++;
     try {
@@ -353,13 +363,15 @@ export class ImportService {
           id, srcPath, probe, outPath: r.path, ext: r.result.extension, mime: MIME[r.result.extension] ?? "application/octet-stream",
           sizeBytes: r.result.sizeBytes, version: 1, touchedAt: Date.now(), busy: false, saving: false,
         });
-        const suggested = suggestName(srcName);
+        
+        // Use the fetched video title to generate a clean sound name suggestion
+        const suggested = suggestName(videoTitle);
         return {
           id,
           suggestedName: suggested,
           nameTaken: suggested !== "" && this.#taken(suggested),
           original: {
-            fileName: srcName,
+            fileName: `${videoTitle}.ext`,
             sizeBytes: (await stat(srcPath)).size,
             format: probe.format,
             codec: probe.codec,
