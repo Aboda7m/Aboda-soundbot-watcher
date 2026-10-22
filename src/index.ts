@@ -68,8 +68,6 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   }
 });
 
-registerTextCommands(client, { library, queue, prefix: config.commandPrefix });
-
 // Media import page (/import). IMPORT_ENABLED=0 removes the page and its API entirely.
 const importer = config.importEnabled
   ? new ImportService({
@@ -87,6 +85,8 @@ const importer = config.importEnabled
       log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
     })
   : undefined;
+
+registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer });
 
 const server = createHttpServer({
   host: config.host,
