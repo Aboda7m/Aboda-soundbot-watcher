@@ -240,8 +240,6 @@ async function postJson(path, payload) {
   return body;
 }
 
-// /api/status returns a bare array; the SSE snapshot has historically carried
-// { playing: [...] }. Accept both so the queue never blanks out.
 function normalizePlayback(pb) {
   if (Array.isArray(pb)) return pb;
   if (Array.isArray(pb?.playing)) return pb.playing;
@@ -269,10 +267,6 @@ const guildMembers = (g) => g.channels.reduce((n, c) => n + memberCount(c), 0);
 const liveGuilds = () => state.guilds.filter((g) => Array.isArray(g.channels) && g.channels.length);
 const bestChannel = (g) => [...g.channels].sort((a, b) => memberCount(b) - memberCount(a))[0];
 
-/**
- * The channel sounds will play in. Prefers the user's saved choice; if that
- * channel isn't in the live list, falls back to the busiest channel.
- */
 function activeTarget() {
   const guilds = liveGuilds();
   if (!guilds.length) return null;
@@ -302,7 +296,6 @@ function setPreferred(guildId, channelId) {
   renderNow();
 }
 
-/** Update a <select> without rebuilding it unless its options changed. */
 function syncSelect(select, items, value, placeholder) {
   if (!items.length) {
     select.replaceChildren(new Option(placeholder, ""));
@@ -345,8 +338,6 @@ function customSelectLabel(select) {
 function installCustomSelect(select) {
   if (!select || customSelectState.has(select)) return;
 
-  // A button cannot safely live inside a <label>. Convert the visual field
-  // wrapper to a div while preserving its contents and styling.
   const oldLabel = select.closest("label");
   if (oldLabel) {
     const field = document.createElement("div");
@@ -764,7 +755,6 @@ function renderSoundViews() {
   updateCardStates();
 }
 
-/** Cheap in-place update of playing/queued/disabled state on existing cards. */
 function updateCardStates() {
   const t = activeTarget();
   const entry = t ? state.playback.find((e) => guildIdOf(e) === t.guildId) : null;
@@ -877,8 +867,6 @@ async function loadSounds(quiet = false) {
   renderBadges();
 }
 
-/* ---------- favorites + recent ---------- */
-
 function toggleFavorite(name) {
   const added = !state.favorites.has(name);
   if (added) state.favorites.add(name);
@@ -917,8 +905,6 @@ $("clear-recent").addEventListener("click", () => {
   renderBadges();
   announce("Recently played cleared");
 });
-
-/* ---------- playing ---------- */
 
 function setBusy(name, on) {
   for (const card of document.querySelectorAll(".card[data-sound]")) {
@@ -964,8 +950,6 @@ async function playSound(name) {
     setBusy(name, false);
   }
 }
-
-/* ---------- queue ---------- */
 
 const guildLabel = (id) => names.guilds.get(id) || `Server …${String(id).slice(-4)}`;
 const channelLabel = (id) => names.channels.get(id) || "voice channel";
@@ -1117,8 +1101,6 @@ $("now-skip").addEventListener("click", (e) => {
   runQueueAction("skip", b.dataset.guild, null, b);
 });
 
-/* ---------- now-playing bar ---------- */
-
 function renderNow() {
   const bar = $("now");
   const playing = state.playback.filter((e) => e.current);
@@ -1145,8 +1127,6 @@ function renderNow() {
   skip.removeAttribute("aria-disabled");
   skip.textContent = "Skip";
 }
-
-/* ---------- voice members ---------- */
 
 function memberRow(m) {
   const li = el("li");
@@ -1236,8 +1216,6 @@ function renderVoice() {
   );
 }
 
-/* ---------- header status, badges ---------- */
-
 function renderStatus() {
   const s = $("status");
   let pair;
@@ -1275,8 +1253,6 @@ function renderPlayback() {
   renderBadges();
 }
 
-/* ---------- snapshot from /events ---------- */
-
 function onSnapshot(snap) {
   state.gotSnapshot = true;
   state.ready = Boolean(snap.ready);
@@ -1301,7 +1277,6 @@ let retryTimer = null;
 
 function connect() {
   clearTimeout(retryTimer);
-  // EventSource can't send headers, so the key goes through the query string.
   source = new EventSource("/events" + location.search);
 
   source.onopen = () => {
@@ -1322,8 +1297,6 @@ function connect() {
     state.conn = "down";
     renderStatus();
 
-    // A non-200 response (e.g. proxy error while the bot restarts) closes the
-    // stream for good, so reconnect manually with backoff.
     if (source.readyState === EventSource.CLOSED) {
       source.close();
       retries = Math.min(retries + 1, 5);
@@ -1331,8 +1304,6 @@ function connect() {
     }
   };
 }
-
-/* ---------- tabs ---------- */
 
 function setTab(tab, { focus = false, scroll = false, hash = true } = {}) {
   if (!TABS.includes(tab)) tab = "sounds";
@@ -1381,8 +1352,6 @@ window.addEventListener("hashchange", () => {
   const t = location.hash.slice(1);
   if (TABS.includes(t) && t !== state.tab) setTab(t, { hash: false });
 });
-
-/* ---------- toolbar + delegated clicks ---------- */
 
 $("search").addEventListener("input", (e) => {
   state.query = e.target.value;
@@ -1459,9 +1428,6 @@ document.addEventListener("keydown", (e) => {
   $("search").select();
 });
 
-/* ---------- housekeeping ---------- */
-
-// Keep several open tabs in sync.
 window.addEventListener("storage", (e) => {
   if (e.key === K.fav) {
     state.favorites = new Set(strings(store.read(K.fav, [])));
@@ -1478,17 +1444,23 @@ window.addEventListener("storage", (e) => {
   }
 });
 
-// Pick up new sounds and play counts when returning to the tab.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (Date.now() - state.soundsLoadedAt > 60_000) loadSounds(true);
   refreshPlayback().catch(() => {});
 });
 
-/* ---------- start ---------- */
+/* ---------- dynamic import sounds button URL handler ---------- */
+const importBtn = document.getElementById("importSoundsButton");
+if (importBtn) {
+  const currentUrl = new URL(window.location.href);
+  const importUrl = new URL("/import", currentUrl.origin);
+  if (currentUrl.searchParams.has("key")) {
+    importUrl.searchParams.set("key", currentUrl.searchParams.get("key"));
+  }
+  importBtn.href = importUrl.toString();
+}
 
-// Keep the native <select> elements as the source of truth for existing app
-// logic, but render their menus inside the page to avoid OS-level popup windows.
 installCustomSelect($("guild-select"));
 installCustomSelect($("channel-select"));
 installCustomSelect($("sort"));

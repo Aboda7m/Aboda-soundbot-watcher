@@ -342,3 +342,44 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px max(20px, env(safe-area-
 }
 .q-current { flex-wrap: wrap; }
 .q-current .q-sound { flex: 1 1 160px; }
+
+.import-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* ---------- header layout fixes ---------- */
+@media (min-width: 721px) {
+  /* Four compact columns: title | target fields | import button | status */
+  .top { 
+    display: grid; 
+    grid-template-columns: auto minmax(0, 1fr) auto auto; 
+    column-gap: 20px; 
+    align-items: end; 
+    padding-left: max(20px, calc((100vw - 1280px) / 2 + 20px)); 
+    padding-right: max(20px, calc((100vw - 1280px) / 2 + 20px)); 
+  }
+  .top-row { display: contents; }
+  .top-row h1 { grid-column: 1; grid-row: 1; margin-bottom: 12px; }
+  .top-row .import-btn { grid-column: 3; grid-row: 1; margin-bottom: 14px; }
+  .top-row .status { grid-column: 4; grid-row: 1; margin-bottom: 14px; }
+  .target { grid-column: 2; grid-row: 1; margin: 0 0 12px; max-width: none; }
+  .target-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .now { grid-column: 1 / -1; max-width: none; margin: 0 0 12px; }
+  .tabs { grid-column: 1 / -1; max-width: none; margin: 0; }
+}
+
+@media (max-width: 720px) {
+  /* Mobile view spacing for the button in the top row */
+  .top { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--bg); }
+  .field-label { font-size: 12px; }
+  .top-row { flex-wrap: wrap; }
+  .import-btn { order: 2; margin-left: auto; }
+  .status { order: 3; }
+}
+
+.q-current { flex-wrap: wrap; }
+.q-current .q-sound { flex: 1 1 160px; }
