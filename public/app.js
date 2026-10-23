@@ -307,6 +307,7 @@ function syncSelect(select, items, value, placeholder) {
   if (!items.length) {
     select.replaceChildren(new Option(placeholder, ""));
     select.disabled = true;
+    updateCustomSelect(select);
     return;
   }
 
@@ -324,6 +325,218 @@ function syncSelect(select, items, value, placeholder) {
 
   select.value = value;
   select.disabled = false;
+  updateCustomSelect(select);
+}
+
+/* ---------- in-page custom dropdowns ---------- */
+
+const customSelectState = new WeakMap();
+
+function customSelectLabel(select) {
+  const field = select.closest(".field, .sort");
+  const label = field?.querySelector(".field-label");
+  if (label) {
+    if (!label.id) label.id = `${select.id}-label`;
+    return label.id;
+  }
+  return "";
+}
+
+function installCustomSelect(select) {
+  if (!select || customSelectState.has(select)) return;
+
+  // A button cannot safely live inside a <label>. Convert the visual field
+  // wrapper to a div while preserving its contents and styling.
+  const oldLabel = select.closest("label");
+  if (oldLabel) {
+    const field = document.createElement("div");
+    field.className = oldLabel.className;
+    while (oldLabel.firstChild) field.append(oldLabel.firstChild);
+    oldLabel.replaceWith(field);
+  }
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "custom-select";
+  wrapper.dataset.customSelect = select.id;
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "custom-select-trigger";
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  const labelId = customSelectLabel(select);
+  if (labelId) trigger.setAttribute("aria-labelledby", labelId);
+  else trigger.setAttribute("aria-label", select.id.replaceAll("-", " "));
+
+  const value = document.createElement("span");
+  value.className = "custom-select-value";
+  const chevron = document.createElement("span");
+  chevron.className = "custom-select-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.textContent = "⌄";
+  trigger.append(value, chevron);
+
+  const listbox = document.createElement("div");
+  listbox.className = "custom-select-listbox";
+  listbox.id = `${select.id}-options`;
+  listbox.setAttribute("role", "listbox");
+  listbox.hidden = true;
+  trigger.setAttribute("aria-controls", listbox.id);
+
+  select.classList.add("custom-select-source");
+  select.setAttribute("aria-hidden", "true");
+  select.tabIndex = -1;
+  select.replaceWith(wrapper);
+  wrapper.append(select, trigger, listbox);
+
+  const record = { wrapper, trigger, value, listbox, activeIndex: -1, signature: "" };
+  customSelectState.set(select, record);
+
+  function close({ restoreFocus = false } = {}) {
+    wrapper.dataset.open = "false";
+    listbox.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus({ preventScroll: true });
+  }
+
+  function setActive(index, focus = true) {
+    const options = [...listbox.querySelectorAll('[role="option"]')];
+    if (!options.length) return;
+    record.activeIndex = Math.max(0, Math.min(index, options.length - 1));
+    options.forEach((option, i) => {
+      option.dataset.active = String(i === record.activeIndex);
+      option.tabIndex = i === record.activeIndex ? 0 : -1;
+    });
+    if (focus) options[record.activeIndex].focus({ preventScroll: true });
+    options[record.activeIndex].scrollIntoView({ block: "nearest" });
+  }
+
+  function open(preferLast = false) {
+    if (select.disabled || !select.options.length) return;
+    listbox.hidden = false;
+    wrapper.dataset.open = "true";
+    trigger.setAttribute("aria-expanded", "true");
+
+    const rect = wrapper.getBoundingClientRect();
+    const below = Math.max(0, window.innerHeight - rect.bottom - 12);
+    const above = Math.max(0, rect.top - 12);
+    const placeAbove = below < 150 && above > below;
+    const available = placeAbove ? above : below;
+    listbox.dataset.placement = placeAbove ? "top" : "bottom";
+    listbox.style.maxHeight = `${Math.max(48, Math.min(240, available - 8))}px`;
+
+    const options = [...listbox.querySelectorAll('[role="option"]')];
+    const selected = options.findIndex((option) => option.dataset.value === select.value);
+    setActive(preferLast ? options.length - 1 : Math.max(0, selected), true);
+  }
+
+  function choose(option) {
+    if (!option || select.disabled) return;
+    const nextValue = option.dataset.value;
+    if (select.value !== nextValue) {
+      select.value = nextValue;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      updateCustomSelect(select);
+    }
+    close({ restoreFocus: true });
+  }
+
+  trigger.addEventListener("click", () => {
+    if (listbox.hidden) open();
+    else close();
+  });
+
+  trigger.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
+      event.preventDefault();
+      open(event.key === "ArrowUp");
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      open();
+      setActive(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      open(true);
+    }
+  });
+
+  listbox.addEventListener("click", (event) => {
+    const option = event.target instanceof Element ? event.target.closest('[role="option"]') : null;
+    if (option) choose(option);
+  });
+
+  listbox.addEventListener("keydown", (event) => {
+    const options = [...listbox.querySelectorAll('[role="option"]')];
+    const current = event.target instanceof Element ? event.target.closest('[role="option"]') : null;
+    const index = Math.max(0, options.indexOf(current));
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActive(index + 1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActive(index - 1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setActive(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setActive(options.length - 1);
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      choose(options[index]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      close({ restoreFocus: true });
+    } else if (event.key === "Tab") {
+      close();
+    }
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!wrapper.contains(event.target)) close();
+  });
+  select.addEventListener("change", () => updateCustomSelect(select));
+  updateCustomSelect(select);
+}
+
+function updateCustomSelect(select) {
+  const record = customSelectState.get(select);
+  if (!record) return;
+
+  const options = [...select.options].map((option) => ({
+    value: option.value,
+    label: option.textContent || option.value,
+    disabled: option.disabled,
+  }));
+  const signature = JSON.stringify(options);
+  if (signature !== record.signature) {
+    record.signature = signature;
+    record.listbox.replaceChildren(...options.map((item) => {
+      const option = document.createElement("div");
+      option.className = "custom-select-option";
+      option.setAttribute("role", "option");
+      option.dataset.value = item.value;
+      option.textContent = item.label;
+      option.setAttribute("aria-selected", String(item.value === select.value));
+      option.setAttribute("aria-disabled", String(item.disabled));
+      option.tabIndex = -1;
+      return option;
+    }));
+  }
+
+  const selected = options.find((option) => option.value === select.value);
+  record.value.textContent = selected?.label || options[0]?.label || "Select an option";
+  record.trigger.disabled = select.disabled || options.length === 0;
+  record.trigger.setAttribute("aria-disabled", String(record.trigger.disabled));
+  for (const option of record.listbox.querySelectorAll('[role="option"]')) {
+    option.setAttribute("aria-selected", String(option.dataset.value === select.value));
+  }
+  if (record.trigger.disabled) {
+    record.listbox.hidden = true;
+    record.wrapper.dataset.open = "false";
+    record.trigger.setAttribute("aria-expanded", "false");
+  }
 }
 
 function renderTarget() {
@@ -1273,6 +1486,12 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /* ---------- start ---------- */
+
+// Keep the native <select> elements as the source of truth for existing app
+// logic, but render their menus inside the page to avoid OS-level popup windows.
+installCustomSelect($("guild-select"));
+installCustomSelect($("channel-select"));
+installCustomSelect($("sort"));
 
 setTab(location.hash.slice(1), { hash: false });
 renderStatus();
