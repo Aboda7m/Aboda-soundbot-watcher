@@ -82,6 +82,24 @@ export class SoundRepository {
     return this.#data.entrances[userId] || undefined;
   }
 
+  /** Sets a user's entrance sound and saves immediately. Other db.json data is left untouched. */
+  setEntrance(userId: string, sound: string): void {
+    this.#reloadIfChanged();
+    this.#data.entrances[userId] = sound;
+    this.#dirty = true;
+    this.flush();
+  }
+
+  /** Removes a user's entrance sound and saves immediately. Returns false when none was set. */
+  clearEntrance(userId: string): boolean {
+    this.#reloadIfChanged();
+    if (!Object.hasOwn(this.#data.entrances, userId)) return false;
+    delete this.#data.entrances[userId];
+    this.#dirty = true;
+    this.flush();
+    return true;
+  }
+
   exit(userId: string): string | undefined {
     this.#reloadIfChanged();
     return this.#data.exits[userId] || undefined;

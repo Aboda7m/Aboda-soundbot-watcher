@@ -86,3 +86,38 @@ test("external edits to db.json are picked up while running", () => {
   utimesSync(p, t, t);
   assert.equal(r.entrance("111"), "other");
 });
+
+test("setEntrance / clearEntrance persist immediately and keep everything else", () => {
+  const p = tmp();
+  const original = JSON.stringify(legacy, null, 2);
+  writeFileSync(p, original);
+  const r = new SoundRepository(p, { countPlays: true });
+  r.setEntrance("444", "newsound");
+  r.setEntrance("111", "changed");
+  let saved = JSON.parse(readFileSync(p, "utf8"));
+  assert.deepEqual(saved.entrances, { "111": "changed", "444": "newsound" });
+  assert.deepEqual(saved.exits, legacy.exits);
+  assert.deepEqual(saved.sounds, legacy.sounds);
+  assert.deepEqual(saved.customKey, { keep: "me" });
+  assert.equal(readFileSync(`${p}.bak`, "utf8"), original);
+  assert.equal(existsSync(`${p}.tmp`), false);
+  assert.equal(r.entrance("444"), "newsound");
+
+  assert.equal(r.clearEntrance("444"), true);
+  assert.equal(r.clearEntrance("444"), false);
+  assert.equal(r.clearEntrance("nobody"), false);
+  saved = JSON.parse(readFileSync(p, "utf8"));
+  assert.deepEqual(saved.entrances, { "111": "changed" });
+  assert.equal(r.entrance("444"), undefined);
+  // a fresh instance (restart) sees the same data
+  assert.equal(new SoundRepository(p, { countPlays: true }).entrance("111"), "changed");
+});
+
+test("setEntrance creates db.json when missing; clearing a missing entry writes nothing", () => {
+  const p = tmp();
+  const r = new SoundRepository(p, { countPlays: true });
+  assert.equal(r.clearEntrance("1"), false);
+  assert.equal(existsSync(p), false);
+  r.setEntrance("1", "a");
+  assert.deepEqual(JSON.parse(readFileSync(p, "utf8")).entrances, { "1": "a" });
+});

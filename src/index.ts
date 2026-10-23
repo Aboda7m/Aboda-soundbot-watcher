@@ -86,7 +86,7 @@ const importer = config.importEnabled
     })
   : undefined;
 
-registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer });
+registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo });
 
 const server = createHttpServer({
   host: config.host,
