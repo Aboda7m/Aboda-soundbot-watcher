@@ -12,6 +12,7 @@ import {
   parseSoundListCommand,
   partialMatches,
   resolveSoundName,
+  searchSound,
 } from "./textCommand.ts";
 
 const FAIL_TEXT: Record<Extract<EnqueueResult, { ok: false }>["reason"], string> = {
@@ -188,13 +189,20 @@ export function registerTextCommands(
         return;
       }
 
-      const resolved = resolveSoundName(cmd.name, library.list());
+      const resolved = searchSound(cmd.name, library.list());
       if (resolved.kind === "none") {
         await say(message, `No sound called "${cmd.name}". Try \`${prefix}soundlist\`.`);
         return;
       }
       if (resolved.kind === "ambiguous") {
         await say(message, `"${cmd.name}" matches several sounds: ${formatChoices(resolved.matches)}. Be more specific.`);
+        return;
+      }
+      if (resolved.kind === "suggest") {
+        await say(
+          message,
+          `I'm not sure which sound you mean by "${cmd.name}". Did you mean: ${formatChoices(resolved.matches)}? Be more specific, or see \`${prefix}soundlist\`.`,
+        );
         return;
       }
       const name = resolved.name;
