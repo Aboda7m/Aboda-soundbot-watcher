@@ -72,8 +72,15 @@ test("parseEntranceCommand", () => {
   assert.deepEqual(parseEntranceCommand("!entrance !CLEAR"), { kind: "entrance-clear" });
   assert.deepEqual(parseEntranceCommand("?entrance ?clear", "?"), { kind: "entrance-clear" });
   assert.deepEqual(parseEntranceCommand("!RM-entrance"), { kind: "entrance-clear" });
-  assert.deepEqual(parseEntranceCommand("!entrance <@123456>"), { kind: "entrance-mention" });
+  // A user mention targets that user (administrator feature); only role mentions, @everyone and @here
+  // are the "explain the syntax" case.
+  assert.deepEqual(parseEntranceCommand("!entrance <@123456>"), { kind: "entrance-target-show", targetId: "123456" });
+  assert.deepEqual(parseEntranceCommand("!entrance <@!123456>"), { kind: "entrance-target-show", targetId: "123456" });
+  assert.deepEqual(parseEntranceCommand('!entrance <@123456> "air horn"'), { kind: "entrance-target-set", targetId: "123456", name: "air horn" });
+  assert.deepEqual(parseEntranceCommand("!entrance <@123456> !clear"), { kind: "entrance-target-clear", targetId: "123456" });
+  assert.deepEqual(parseEntranceCommand("!entrance <@&123456>"), { kind: "entrance-mention" });
   assert.deepEqual(parseEntranceCommand("!entrance @everyone"), { kind: "entrance-mention" });
+  assert.deepEqual(parseEntranceCommand("!entrance @here"), { kind: "entrance-mention" });
   assert.equal(parseEntranceCommand("!entrances"), null);
   assert.equal(parseEntranceCommand("hello !entrance"), null);
 });

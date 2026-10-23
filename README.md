@@ -19,13 +19,55 @@ Edits to `public/*` need only a browser refresh. Edits to `db.json` are picked u
 | `src/sound/` | library, db.json repository, intro rules, queue | No (talks to `VoicePort` only) |
 | `src/watcher/` | voice-list snapshot + live push | No voice API, reads discord.js caches |
 | `src/http/` | local page + API | No |
-| `src/discord/` | client and intents | Gateway only |
+| `src/discord/` | client, intents, text commands (`commands/*.command.ts`) | Gateway only |
 | `src/index.ts` | wiring | No |
 
 If voice breaks after a discord.js / @discordjs/voice update, fix `src/voice/` and nothing else.
 Keep `package-lock.json` committed: it pins the exact versions that worked.
 Startup prints nothing about voice libraries; to check Opus/DAVE/FFmpeg run
 `node -e "import('@discordjs/voice').then(v=>console.log(v.generateDependencyReport()))"`.
+
+## Text commands
+
+Each chat command lives in its own file in `src/discord/commands/` and is discovered when the bot starts.
+
+| Command | File |
+|---|---|
+| `!sound <name>` | `sound.command.ts` |
+| `!soundlist` | `soundlist.command.ts` |
+| `!entrance`, `!RM-entrance` | `entrance.command.ts` |
+| `!import <url> [from X to Y]` | `import.command.ts` |
+
+Shared code: `textCommand.ts` (pure parsing and sound search), `commandTypes.ts` (the interface below),
+`commandUtils.ts` (reply helpers), `commandRegistry.ts` (the loader), `textCommands.ts` (dispatch).
+
+### Adding a text command
+
+Create `src/discord/commands/<name>.command.ts`. No other file needs editing. Example `ping.command.ts`:
+
+```ts
+import { defineTextCommand } from "../commandTypes.ts";
+
+export default defineTextCommand({
+  names: ["ping", "pong"],              // lowercase, no prefix; the first is the canonical name, the rest are aliases
+  description: "Replies with pong",     // shown in the startup log and in error messages
+  // Only called when the first word is one of `names` (any capitalisation). Return null to stay silent.
+  parse: (content) => ({ args: content.trim().split(/\s+/).slice(1) }),
+  // `message` is the Discord message, `deps` is { library, queue, prefix, importer?, repo? }.
+  execute: async ({ message }, { args }) => {
+    await message.reply(`pong ${args.join(" ")}`.trim());
+  },
+});
+```
+
+Rules, all checked at startup (a violation stops the bot with a message listing every problem):
+- the file name ends in `.command.ts`, directly inside `commands/` (no subfolders, no other `.ts` files there);
+- the default export comes from `defineTextCommand(...)`;
+- names match `[a-z0-9][a-z0-9_-]*` and are unique across all commands (a duplicate is an error, never a silent override);
+- parsing helpers (`parseXxx`, `searchSound`, `chunkLines`, ...) belong in `textCommand.ts`; reply helpers (`say`, `formatChoices`) are in `commandUtils.ts`.
+
+Commands are loaded once at startup. Restart the bot after adding a file (`npm run dev` watches files it has
+already loaded, so it may not notice a brand-new one). Only messages sent in a server channel by non-bots reach a command.
 
 ## Migrating from the legacy bot
 

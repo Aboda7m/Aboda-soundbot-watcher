@@ -73,9 +73,11 @@ test("!entrance shows, sets, replaces and clears the caller's own entrance", asy
   assert.match(await run("!entrance"), /\*\*vine boom\*\*/);
   assert.match(await run("!entrance AIRHORN"), /now \*\*airhorn\*\*/); // case-insensitive -> canonical name stored
   assert.equal(repo.entrance("u1"), "airhorn");
-  assert.match(await run("!entrance !clear"), /removed/);
+  // Every clear is now answered with the same message (it no longer says whether anything was set);
+  // the behaviour under test is that the assignment is gone.
+  assert.match(await run("!entrance !clear"), /^Cleared your entrance sound\.$/);
   assert.equal(repo.entrance("u1"), undefined);
-  assert.match(await run("!RM-entrance"), /don't have/);
+  assert.match(await run("!RM-entrance"), /^Cleared your entrance sound\.$/);
 });
 
 test("!entrance rejects unknown names with suggestions and does not save", async () => {
@@ -87,9 +89,11 @@ test("!entrance rejects unknown names with suggestions and does not save", async
   assert.equal(repo.entrance("u1"), undefined);
 });
 
-test("!entrance refuses to target another member", async () => {
+// Targeting another member is now allowed for Manage Server / Administrator (see test/textCommandDispatch.test.ts);
+// a caller without that permission (the fake message has no member) must still be refused and change nothing.
+test("!entrance refuses to target another member without Manage Server or Administrator", async () => {
   const { repo, run } = setup();
-  assert.match(await run("!entrance <@999>"), /only change your own/);
+  assert.match(await run("!entrance <@999>"), /Manage Server or Administrator permission/);
   assert.equal(repo.entrance("999"), undefined);
   assert.equal(repo.entrance("u1"), undefined);
 });

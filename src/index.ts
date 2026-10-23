@@ -86,7 +86,13 @@ const importer = config.importEnabled
     })
   : undefined;
 
-registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo });
+try {
+  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo });
+} catch (err) {
+  console.error(`Refusing to start: ${(err as Error).message}`);
+  console.error("Fix the files in src/discord/commands/ and start again.");
+  process.exit(1);
+}
 
 const server = createHttpServer({
   host: config.host,
