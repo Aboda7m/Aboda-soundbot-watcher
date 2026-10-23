@@ -1,4 +1,4 @@
-import { Events, type Client } from "discord.js";
+import { Events, PermissionFlagsBits, type Client } from "discord.js";
 import type { SoundLibrary } from "../sound/SoundLibrary.ts";
 import type { EnqueueResult, SoundQueue } from "../sound/SoundQueue.ts";
 import type { ImportService } from "../import/ImportService.ts";
@@ -22,91 +22,203 @@ const FAIL_TEXT: Record<Extract<EnqueueResult, { ok: false }>["reason"], string>
   "shutting-down": "I'm shutting down.",
 };
 
-/** The small slice of a discord.js Message the new handlers use (keeps them unit-testable). */
+/** The small slice of a discord.js Message the handlers use. */
 export interface CommandMessage {
   author: { id: string; send(content: string): Promise<unknown> };
-  reply(options: string | { content: string; allowedMentions?: { parse: never[] } }): Promise<unknown>;
+  member?: {
+    permissions: {
+      has(permission: bigint): boolean;
+    };
+  } | null;
+  reply(
+    options:
+      | string
+      | {
+          content: string;
+          allowedMentions?: { parse: never[] };
+        },
+  ): Promise<unknown>;
 }
 
 const NO_MENTIONS = { parse: [] as never[] };
-const say = (m: CommandMessage, content: string) => m.reply({ content, allowedMentions: NO_MENTIONS });
+const say = (m: CommandMessage, content: string) =>
+  m.reply({ content, allowedMentions: NO_MENTIONS });
 
-/** Shows up to `max` names as a comma list, ending with "and N more" when truncated (stays far below 2000 chars). */
+/** Shows names as a comma list, ending with "and N more" when truncated. */
 function formatChoices(names: string[], max = 10): string {
-  const shown = names.slice(0, max).map((n) => `\`${n.replace(/`/g, "'")}\``);
+  const shown = names.slice(0, max).map((n) => `**${escapeMarkdown(n)}**`);
   return shown.join(", ") + (names.length > max ? `, and ${names.length - max} more` : "");
 }
 
-/** `!soundlist`: DM the caller every sound name, sorted, in chunks below Discord's 2000-char limit. */
-export async function handleSoundList(message: CommandMessage, library: SoundLibrary): Promise<void> {
+/** Server managers and administrators may configure another member's entrance sound. */
+function canManageEntrances(message: CommandMessage): boolean {
+  const permissions = message.member?.permissions;
+  return Boolean(
+    permissions?.has(PermissionFlagsBits.ManageGuild) ||
+      permissions?.has(PermissionFlagsBits.Administrator),
+  );
+}
+
+/** !soundlist: DM every sound name, sorted, in chunks below Discord's message limit. */
+export async function handleSoundList(
+  message: CommandMessage,
+  library: SoundLibrary,
+): Promise<void> {
   const names = [...library.list()].sort((a, b) => a.localeCompare(b));
   if (names.length === 0) {
     await say(message, "There are no sounds in the library yet.");
     return;
   }
+
   const chunks = chunkLines(
     names.map((n) => `• ${escapeMarkdown(n)}`),
     undefined,
     `**Available sounds (${names.length}):**\n`,
   );
+
   try {
-    for (const chunk of chunks) await message.author.send(chunk);
+    for (const chunk of chunks) {
+      await message.author.send(chunk);
+    }
   } catch {
-    await say(message, "I couldn't DM you. Check that your DMs from server members are enabled and try again.");
+    await say(
+      message,
+      "I couldn't DM you. Check that your DMs from server members are enabled and try again.",
+    );
     return;
   }
-  await say(message, `📬 Sent you a DM with ${names.length} sound${names.length === 1 ? "" : "s"}.`);
+
+  await say(message, `📬 Sent you a DM with all ${names.length} sound names.`);
 }
 
-/** `!entrance` / `!entrance <name>` / `!entrance !clear` / `!RM-entrance`. Always acts on the caller only. */
+/**
+ * Resolves and validates a sound name for an entrance assignment.
+ */
+async function setEntranceForUser(
+  message: CommandMessage,
+  targetId: string,
+  input: string,
+  deps: { library: SoundLibrary; repo: SoundRepository; prefix: string },
+  targetLabel: string,
+): Promise<void> {
+  const { library, repo, prefix } = deps;
+  const names = library.list();
+  const result = resolveSoundName(input, names, { allowPartial: false });
+
+  if (result.kind === "match") {
+    repo.setEntrance(targetId, result.name);
+    await say(message, `${targetLabel}'s entrance sound is now **${escapeMarkdown(result.name)}**.`);
+    return;
+  }
+
+  if (result.kind === "ambiguous") {
+    await say(
+      message,
+      `Several sounds are named like that: ${formatChoices(result.matches)}. Use the exact name.`,
+    );
+    return;
+  }
+
+  const similar = partialMatches(input, names);
+  await say(
+    message,
+    `No sound called "${escapeMarkdown(input)}".` +
+      (similar.length ? ` Did you mean: ${formatChoices(similar)}?` : ` See \`${prefix}soundlist\`.`),
+  );
+}
+
+/**
+ * Handles all entrance commands for self and managed users.
+ */
 export async function handleEntrance(
   message: CommandMessage,
   cmd: NonNullable<ReturnType<typeof parseEntranceCommand>>,
   deps: { library: SoundLibrary; repo?: SoundRepository; prefix: string },
 ): Promise<void> {
   const { library, repo, prefix } = deps;
+
   if (!repo) {
     await say(message, "Entrance sounds are not available right now.");
     return;
   }
+
   const userId = message.author.id;
 
-  if (cmd.kind === "entrance-mention") {
-    await say(message, `You can only change your own entrance sound. Use \`${prefix}entrance <sound name>\`.`);
-    return;
+  if (
+    cmd.kind === "entrance-target-show" ||
+    cmd.kind === "entrance-target-set" ||
+    cmd.kind === "entrance-target-clear"
+  ) {
+    if (!canManageEntrances(message)) {
+      await say(
+        message,
+        "You need the Manage Server or Administrator permission to manage another member's entrance sound.",
+      );
+      return;
+    }
+
+    const targetId = cmd.targetId;
+    const targetLabel = `<@${targetId}>`;
+
+    if (cmd.kind === "entrance-target-show") {
+      const current = repo.entrance(targetId);
+      await say(
+        message,
+        current
+          ? `${targetLabel}'s entrance sound is **${escapeMarkdown(current)}**` +
+              (library.has(current)
+                ? "."
+                : " (that sound no longer exists, so nothing will play).")
+          : `${targetLabel} has no entrance sound set.`,
+      );
+      return;
+    }
+
+    if (cmd.kind === "entrance-target-clear") {
+      repo.clearEntrance(targetId);
+      await say(message, `Cleared ${targetLabel}'s entrance sound.`);
+      return;
+    }
+
+    if (cmd.kind === "entrance-target-set") {
+      await setEntranceForUser(message, targetId, cmd.name, { library, repo, prefix }, targetLabel);
+      return;
+    }
   }
+
   if (cmd.kind === "entrance-show") {
     const current = repo.entrance(userId);
     await say(
       message,
       current
-        ? `Your entrance sound is **${escapeMarkdown(current)}**${library.has(current) ? "" : " (that sound no longer exists, so nothing will play)"}. Change it with \`${prefix}entrance <sound name>\` or remove it with \`${prefix}entrance ${prefix}clear\`.`
-        : `You have no entrance sound. Set one with \`${prefix}entrance <sound name>\` (see \`${prefix}soundlist\`).`,
+        ? `Your entrance sound is **${escapeMarkdown(current)}**` +
+            (library.has(current)
+              ? "."
+              : " (that sound no longer exists, so nothing will play).") +
+            ` Change it with \`${prefix}entrance <sound>\` or clear it with \`${prefix}entrance !clear\`.`
+        : `You have no entrance sound set. Set one with \`${prefix}entrance <sound>\`.`,
     );
     return;
   }
+
   if (cmd.kind === "entrance-clear") {
-    await say(message, repo.clearEntrance(userId) ? "Your entrance sound has been removed." : "You don't have an entrance sound set.");
+    repo.clearEntrance(userId);
+    await say(message, "Cleared your entrance sound.");
     return;
   }
 
-  // entrance-set: exact / case-insensitive only, so a typo or fragment never silently sets the wrong sound.
-  const names = library.list();
-  const res = resolveSoundName(cmd.name, names, { allowPartial: false });
-  if (res.kind === "match") {
-    repo.setEntrance(userId, res.name);
-    await say(message, `Your entrance sound is now **${escapeMarkdown(res.name)}**.`);
+  if (cmd.kind === "entrance-mention") {
+    await say(
+      message,
+      `To manage another user's entrance sound, mention them with a sound or \`!clear\`, e.g. \`${prefix}entrance @User sound-name\` (requires Manage Server permission).`,
+    );
     return;
   }
-  if (res.kind === "ambiguous") {
-    await say(message, `Several sounds are named like that: ${formatChoices(res.matches)}. Use the exact name.`);
+
+  if (cmd.kind === "entrance-set") {
+    await setEntranceForUser(message, userId, cmd.name, { library, repo, prefix }, "Your");
     return;
   }
-  const similar = partialMatches(cmd.name, names);
-  await say(
-    message,
-    `No sound called "${cmd.name}".` + (similar.length ? ` Did you mean: ${formatChoices(similar)}?` : ` See \`${prefix}soundlist\`.`),
-  );
 }
 
 /** Listens for text commands (`!sound`, `!soundlist`, `!entrance`, `!import`) and feeds the queue, repo or importer. */
