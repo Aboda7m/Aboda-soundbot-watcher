@@ -36,4 +36,5 @@ desktop.ini
 
 # Voice Activity Logs
 voice-activity-logs.json
-voice-activity-logs.txt
+voice-activity-logs.txts
+sound-play-logs.json

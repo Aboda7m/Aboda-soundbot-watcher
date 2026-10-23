@@ -1,6 +1,6 @@
-
 import { randomUUID } from "node:crypto";
 import type { VoicePort } from "../voice/VoicePort.ts";
+import { logSoundPlay } from "../watcher/SoundPlayLogger.ts";
 
 export type PlaySource = "entrance" | "exit" | "manual";
 
@@ -9,6 +9,7 @@ export interface PlayRequest {
   guildId: string;
   channelId: string;
   source: PlaySource;
+  requestedBy?: { userId: string; username?: string | null } | null;
 }
 
 export interface QueueItem extends PlayRequest {
@@ -226,6 +227,23 @@ export class SoundQueue {
 
           await this.#d.voice.play(guildId, req.channelId, path);
           this.#d.onPlayed?.(req.sound);
+
+          // Log successfully played sound
+          const trigger =
+            req.source === "manual"
+              ? "text-command"
+              : req.source === "entrance"
+                ? "auto-entrance"
+                : "auto-exit";
+
+          logSoundPlay({
+            sound: req.sound,
+            guildId: req.guildId,
+            channelId: req.channelId,
+            source: req.source,
+            trigger,
+            requestedBy: req.requestedBy ?? null,
+          });
         } catch (err) {
           this.#d.log?.(
             `Could not play "${req.sound}" in guild ${guildId}`,

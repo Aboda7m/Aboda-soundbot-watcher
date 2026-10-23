@@ -1,3 +1,4 @@
+// src/discord/commands/sound.command.ts
 import type { EnqueueResult } from "../../sound/SoundQueue.ts";
 import { defineTextCommand } from "../commandTypes.ts";
 import { formatChoices, say } from "../commandUtils.ts";
@@ -47,7 +48,17 @@ export default defineTextCommand({
       return;
     }
 
-    const res = queue.enqueue({ sound: name, guildId, channelId, source: "manual" });
+    const res = queue.enqueue({
+      sound: name,
+      guildId,
+      channelId,
+      source: "manual",
+      requestedBy: {
+        userId: message.author.id,
+        username: message.author.tag ?? message.author.username,
+      },
+    });
+
     if (res.ok) await message.react("🔊");
     else await message.reply(FAIL_TEXT[res.reason]);
   },

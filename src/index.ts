@@ -61,7 +61,20 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
       hasSound: (name) => library.has(name),
     })) {
       if (!introAllowed(`${move.userId}:${plan.kind}`)) continue;
-      queue.enqueue({ sound: plan.sound, guildId: plan.guildId, channelId: plan.channelId, source: plan.kind });
+
+      const member = newState.member || oldState.member;
+      const username = member?.user ? (member.user.tag ?? member.user.username) : null;
+
+      queue.enqueue({
+        sound: plan.sound,
+        guildId: plan.guildId,
+        channelId: plan.channelId,
+        source: plan.kind,
+        requestedBy: {
+          userId: move.userId,
+          username,
+        },
+      });
     }
   } catch (err) {
     console.error("Intro handling failed:", err);
