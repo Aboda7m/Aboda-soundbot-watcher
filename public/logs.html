@@ -42,21 +42,21 @@
     <p id="summary" class="summary" role="status"></p>
 
     <section id="panel" class="log-panel" role="tabpanel" aria-labelledby="tab-sound">
-      <div id="scroller" class="scroller" role="region" aria-label="Log entries, newest at the bottom" tabindex="0">
-        <div id="older-bar" class="older" hidden>
-          <button id="older" class="btn small" type="button">Load older</button>
-          <button id="all" class="btn small" type="button">Load all</button>
-          <p id="older-note" class="hint"></p>
-        </div>
-        <p id="start-note" class="start-note" hidden>Start of the log</p>
+      <div id="scroller" class="scroller" role="region" aria-label="Log entries, newest at the top" tabindex="0">
         <table class="log-table">
           <caption id="caption" class="visually-hidden"></caption>
           <thead id="thead"></thead>
           <tbody id="tbody"></tbody>
         </table>
         <p id="empty" class="empty" hidden></p>
+        <div id="older-bar" class="older" hidden>
+          <button id="older" class="btn small" type="button">Load older</button>
+          <button id="all" class="btn small" type="button">Load all</button>
+          <p id="older-note" class="hint"></p>
+        </div>
+        <p id="start-note" class="start-note" hidden>Start of the log</p>
       </div>
-      <button id="latest" class="btn small latest" type="button" hidden>Jump to latest</button>
+      <button id="latest" class="btn small latest" type="button" hidden>Back to newest</button>
     </section>
   </main>
 

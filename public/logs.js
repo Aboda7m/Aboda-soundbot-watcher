@@ -1,5 +1,5 @@
 // Log viewer: shows sound-play-logs.json and voice-activity-logs.json through /api/logs.
-// Oldest entries are at the top and the newest at the bottom; each log opens scrolled to the bottom.
+// Newest entries are at the top and the oldest at the bottom; each log opens scrolled to the top (the newest).
 // The logs store UTC timestamps; every time shown here is converted to the browser's own time zone.
 // Independent of the dashboard scripts.
 const $ = (id) => document.getElementById(id);
@@ -12,7 +12,7 @@ $("back").href = "/" + location.search;
 const PAGE = 200; // entries per "Load older" and for the first load
 const ALL_CHUNK = 5000; // largest chunk the server returns (used by "Load all" and by polling)
 const POLL_MS = 5000;
-const NEAR_BOTTOM_PX = 48;
+const NEAR_TOP_PX = 48;
 const NONE = "—";
 
 const nf = new Intl.NumberFormat();
@@ -105,13 +105,13 @@ const VIEWS = {
 // ---------- state ----------
 
 const freshView = () => ({
-  items: [], // { i, data, hay } oldest first
+  items: [], // { i, data, hay } oldest first (the table shows them in reverse)
   start: 0, // index of items[0] in the file
   end: 0, // index after the last loaded entry
   total: 0,
   skipped: 0,
   loaded: false,
-  pinned: true, // scrolled to the bottom
+  pinned: true, // scrolled to the top, where the newest entries are
   scrollTop: 0,
 });
 const state = { name: "sound", pending: 0, views: { sound: freshView(), voice: freshView() } };
@@ -148,7 +148,7 @@ function renderHead() {
     tr.append(th);
   }
   $("thead").replaceChildren(tr);
-  $("caption").textContent = `${cfg.label}, oldest first`;
+  $("caption").textContent = `${cfg.label}, newest first`;
 }
 
 function rowFor(item) {
@@ -196,7 +196,7 @@ function updateChrome() {
       v.items.length === v.total
         ? `All ${nf.format(v.total)} ${v.total === 1 ? "entry" : "entries"} loaded`
         : `Latest ${nf.format(v.items.length)} of ${nf.format(v.total)} entries loaded`;
-    if (v.total > 0) summary += " · newest at the bottom";
+    if (v.total > 0) summary += " · newest at the top";
     if (filterText) summary += ` · ${nf.format(shown)} match the filter`;
     if (v.skipped) summary += ` · ${nf.format(v.skipped)} unreadable ${v.skipped === 1 ? "entry" : "entries"} skipped`;
   }
@@ -205,27 +205,31 @@ function updateChrome() {
 
 function rebuild() {
   const frag = document.createDocumentFragment();
-  for (const item of view().items) if (matches(item)) frag.append(rowFor(item));
+  const items = view().items;
+  for (let n = items.length - 1; n >= 0; n--) if (matches(items[n])) frag.append(rowFor(items[n]));
   tbody.replaceChildren(frag);
   updateChrome();
 }
 
-function appendRows(fresh) {
-  const v = view();
-  const wasPinned = v.pinned;
+// New entries go on top. If the reader is at the top they stay there; otherwise the view is
+// shifted down by the height of the new rows so the rows being read do not move.
+function prependRows(fresh) {
+  const wasPinned = view().pinned;
+  const heightBefore = scroller.scrollHeight;
   const frag = document.createDocumentFragment();
-  for (const item of fresh) if (matches(item)) frag.append(rowFor(item));
-  tbody.append(frag);
+  for (let n = fresh.length - 1; n >= 0; n--) if (matches(fresh[n])) frag.append(rowFor(fresh[n]));
+  tbody.prepend(frag);
+  if (wasPinned) scrollToTop();
+  else scroller.scrollTop += scroller.scrollHeight - heightBefore;
   updateChrome();
-  if (wasPinned) scrollToBottom();
 }
 
 // ---------- scrolling ----------
 
-const atBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < NEAR_BOTTOM_PX;
+const atTop = () => scroller.scrollTop < NEAR_TOP_PX;
 
-function scrollToBottom() {
-  scroller.scrollTop = scroller.scrollHeight;
+function scrollToTop() {
+  scroller.scrollTop = 0;
   view().pinned = true;
   $("latest").hidden = true;
 }
@@ -234,12 +238,12 @@ scroller.addEventListener(
   "scroll",
   () => {
     const v = view();
-    v.pinned = atBottom();
+    v.pinned = atTop();
     $("latest").hidden = v.pinned || !v.loaded;
   },
   { passive: true },
 );
-$("latest").addEventListener("click", scrollToBottom);
+$("latest").addEventListener("click", scrollToTop);
 
 // ---------- loading ----------
 
@@ -301,7 +305,7 @@ async function loadLatest(name) {
   updateCount(name);
   if (name === state.name) {
     rebuild();
-    scrollToBottom();
+    scrollToTop();
   }
 }
 
@@ -319,10 +323,10 @@ async function loadOlder(name, all) {
   }
   updateCount(name);
   if (name === state.name) {
-    // Keep what the reader was looking at in place while older rows are added above it.
-    const fromBottom = scroller.scrollHeight - scroller.scrollTop;
+    // Older rows are added below what the reader is looking at, so keep the scroll position as it is.
+    const top = scroller.scrollTop;
     rebuild();
-    scroller.scrollTop = scroller.scrollHeight - fromBottom;
+    scroller.scrollTop = top;
   }
 }
 
@@ -340,7 +344,7 @@ async function poll(name) {
       const fresh = makeItems(data.entries, data.start);
       for (const item of fresh) v.items.push(item);
       v.end = data.start + data.entries.length;
-      if (name === state.name) appendRows(fresh);
+      if (name === state.name) prependRows(fresh);
     }
     if (v.end >= data.total) break;
   }
@@ -354,7 +358,7 @@ function selectTab(name, { focus = false, writeHash = true } = {}) {
 
   const prev = view();
   prev.scrollTop = scroller.scrollTop;
-  prev.pinned = atBottom();
+  prev.pinned = atTop();
 
   state.name = name;
   for (const btn of $("tablist").querySelectorAll("[role=tab]")) {
@@ -369,12 +373,12 @@ function selectTab(name, { focus = false, writeHash = true } = {}) {
   renderHead();
   const v = view();
   if (v.loaded) {
-    const wantBottom = v.pinned;
+    const wantTop = v.pinned;
     rebuild();
-    if (wantBottom) scrollToBottom();
+    if (wantTop) scrollToTop();
     else scroller.scrollTop = v.scrollTop;
-    v.pinned = wantBottom;
-    $("latest").hidden = wantBottom;
+    v.pinned = wantTop;
+    $("latest").hidden = wantTop;
     if ($("live").checked) run(() => poll(name)); // catch up on what happened while this tab was hidden
   } else {
     tbody.replaceChildren();
@@ -427,7 +431,7 @@ $("filter").addEventListener("input", () => {
   filterTimer = setTimeout(() => {
     filterText = $("filter").value.trim().toLowerCase();
     rebuild();
-    scrollToBottom();
+    scrollToTop();
   }, 120);
 });
 

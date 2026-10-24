@@ -111,13 +111,13 @@ main {
 /* ---------- log table ---------- */
 .log-panel { position: relative; flex: 1; min-height: 0; }
 .scroller {
-  height: 100%; overflow: auto; overscroll-behavior: contain;
+  height: 100%; overflow: auto; overscroll-behavior: contain; overflow-anchor: none;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
 }
 
-.older { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.older { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 12px; border-top: 1px solid var(--line); }
 .hint { color: var(--muted); font-size: 13px; }
-.start-note { padding: 10px 12px; color: var(--muted); font-size: 13px; text-align: center; border-bottom: 1px solid var(--line); }
+.start-note { padding: 10px 12px; color: var(--muted); font-size: 13px; text-align: center; border-top: 1px solid var(--line); }
 .empty { padding: 32px 16px; text-align: center; color: var(--muted); }
 
 .log-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
