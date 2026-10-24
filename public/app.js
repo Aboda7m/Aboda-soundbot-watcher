@@ -1450,15 +1450,16 @@ document.addEventListener("visibilitychange", () => {
   refreshPlayback().catch(() => {});
 });
 
-/* ---------- dynamic import sounds button URL handler ---------- */
-const importBtn = document.getElementById("importSoundsButton");
-if (importBtn) {
+/* ---------- header page links: carry ?key=... over to the other pages ---------- */
+for (const [id, path] of [["importSoundsButton", "/import"], ["logsButton", "/logs"]]) {
+  const link = document.getElementById(id);
+  if (!link) continue;
   const currentUrl = new URL(window.location.href);
-  const importUrl = new URL("/import", currentUrl.origin);
+  const target = new URL(path, currentUrl.origin);
   if (currentUrl.searchParams.has("key")) {
-    importUrl.searchParams.set("key", currentUrl.searchParams.get("key"));
+    target.searchParams.set("key", currentUrl.searchParams.get("key"));
   }
-  importBtn.href = importUrl.toString();
+  link.href = target.toString();
 }
 
 installCustomSelect($("guild-select"));

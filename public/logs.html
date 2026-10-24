@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Logs</title>
+  <link rel="stylesheet" href="/logs.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <div class="top-row">
+      <h1>Logs</h1>
+      <a id="back" class="back" href="/">Back to soundboard</a>
+    </div>
+
+    <div role="tablist" aria-label="Log files" id="tablist" class="tabs">
+      <button role="tab" id="tab-sound" aria-controls="panel" aria-selected="true" data-tab="sound" type="button">
+        <span>Sound plays</span><b id="count-sound" class="count"></b>
+      </button>
+      <button role="tab" id="tab-voice" aria-controls="panel" aria-selected="false" tabindex="-1" data-tab="voice" type="button">
+        <span>Voice activity</span><b id="count-voice" class="count"></b>
+      </button>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <p id="banner" class="banner" role="alert" hidden></p>
+
+    <div class="toolbar">
+      <label class="search">
+        <span class="visually-hidden">Filter loaded entries</span>
+        <input id="filter" type="search" placeholder="Filter loaded entries" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="check"><input type="checkbox" id="live" checked> Auto-refresh</label>
+      <button id="refresh" class="btn small" type="button">Refresh</button>
+      <p id="tz" class="tz"></p>
+    </div>
+
+    <p id="summary" class="summary" role="status"></p>
+
+    <section id="panel" class="log-panel" role="tabpanel" aria-labelledby="tab-sound">
+      <div id="scroller" class="scroller" role="region" aria-label="Log entries, newest at the bottom" tabindex="0">
+        <div id="older-bar" class="older" hidden>
+          <button id="older" class="btn small" type="button">Load older</button>
+          <button id="all" class="btn small" type="button">Load all</button>
+          <p id="older-note" class="hint"></p>
+        </div>
+        <p id="start-note" class="start-note" hidden>Start of the log</p>
+        <table class="log-table">
+          <caption id="caption" class="visually-hidden"></caption>
+          <thead id="thead"></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+        <p id="empty" class="empty" hidden></p>
+      </div>
+      <button id="latest" class="btn small latest" type="button" hidden>Jump to latest</button>
+    </section>
+  </main>
+
+  <script src="/logs.js" defer></script>
+</body>
+</html>

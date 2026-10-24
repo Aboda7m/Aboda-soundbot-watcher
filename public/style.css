@@ -343,6 +343,8 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px max(20px, env(safe-area-
 .q-current { flex-wrap: wrap; }
 .q-current .q-sound { flex: 1 1 160px; }
 
+.top-links { display: flex; align-items: center; gap: 8px; }
+
 .import-btn {
   display: inline-flex;
   align-items: center;
@@ -364,7 +366,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px max(20px, env(safe-area-
   }
   .top-row { display: contents; }
   .top-row h1 { grid-column: 1; grid-row: 1; margin-bottom: 12px; }
-  .top-row .import-btn { grid-column: 3; grid-row: 1; margin-bottom: 14px; }
+  .top-row .top-links { grid-column: 3; grid-row: 1; margin-bottom: 14px; }
   .top-row .status { grid-column: 4; grid-row: 1; margin-bottom: 14px; }
   .target { grid-column: 2; grid-row: 1; margin: 0 0 12px; max-width: none; }
   .target-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
@@ -377,7 +379,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px max(20px, env(safe-area-
   .top { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--bg); }
   .field-label { font-size: 12px; }
   .top-row { flex-wrap: wrap; }
-  .import-btn { order: 2; margin-left: auto; }
+  .top-links { order: 2; margin-left: auto; }
   .status { order: 3; }
 }
 

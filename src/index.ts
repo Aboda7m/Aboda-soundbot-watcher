@@ -116,6 +116,11 @@ const server = createHttpServer({
   repo,
   queue,
   importer,
+  // Log viewer page (/logs). Point these at the files your bot writes its logs to.
+  logs: {
+    soundPlayFile: join(process.cwd(), "sound-play-logs.json"),
+    voiceActivityFile: join(process.cwd(), "voice-activity-logs.json"),
+  },
   canTarget: (guildId, channelId) =>
     !!client.guilds.cache.get(guildId)?.channels.cache.get(channelId)?.isVoiceBased(),
 });

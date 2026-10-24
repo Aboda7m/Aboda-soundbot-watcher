@@ -15,6 +15,7 @@ import type { SoundRepository } from "../sound/SoundRepository.ts";
 import type { SoundQueue } from "../sound/SoundQueue.ts";
 import type { ImportService } from "../import/ImportService.ts";
 import { handleImportRoute } from "./importRoutes.ts";
+import { handleLogRoute, type LogFiles } from "./logRoutes.ts";
 
 export interface HttpDeps {
   host: string;
@@ -28,6 +29,8 @@ export interface HttpDeps {
   canTarget(guildId: string, channelId: string): boolean;
   /** Optional media import (page at /import + /api/import/*). Left out = those routes do not exist. */
   importer?: ImportService;
+  /** Optional log viewer (page at /logs + /api/logs). Left out = those routes do not exist. */
+  logs?: LogFiles;
 }
 
 const PUBLIC_DIR = join(
@@ -52,6 +55,17 @@ const IMPORT_STATIC: Record<string, { file: string; type: string; csp?: string }
   },
   "/import.js": { file: "import.js", type: "text/javascript; charset=utf-8" },
   "/import.css": { file: "import.css", type: "text/css; charset=utf-8" },
+};
+
+// Served only when log files are configured. The page only talks to its own /api/logs.
+const LOG_STATIC: Record<string, { file: string; type: string; csp?: string }> = {
+  "/logs": {
+    file: "logs.html",
+    type: "text/html; charset=utf-8",
+    csp: "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'",
+  },
+  "/logs.js": { file: "logs.js", type: "text/javascript; charset=utf-8" },
+  "/logs.css": { file: "logs.css", type: "text/css; charset=utf-8" },
 };
 
 const SECURITY_HEADERS = {
@@ -301,7 +315,11 @@ export function createHttpServer(d: HttpDeps): Server {
     }
   }
 
-  const staticFiles = d.importer ? { ...STATIC, ...IMPORT_STATIC } : STATIC;
+  const staticFiles = {
+    ...STATIC,
+    ...(d.importer ? IMPORT_STATIC : {}),
+    ...(d.logs ? LOG_STATIC : {}),
+  };
 
   const server = createServer(async (req, res) => {
     try {
@@ -351,6 +369,8 @@ export function createHttpServer(d: HttpDeps): Server {
 
         if (handled) return;
       }
+
+      if (d.logs && (await handleLogRoute(d.logs, req, res, url, { json }))) return;
 
       if (isPost && url.pathname === "/api/play") {
         return await play(req, res);
