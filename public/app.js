@@ -1485,6 +1485,7 @@ function applyScale(v, save = true) {
   if (!Number.isFinite(n)) return;
   const scale = Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, n)) * 100) / 100;
   document.documentElement.style.setProperty("--ui-scale", String(scale));
+  document.documentElement.toggleAttribute("data-bigtext", scale >= 1.4);
   if (save) store.write(K.scale, scale);
   $("textSmaller").disabled = scale <= SCALE_MIN;
   $("textLarger").disabled = scale >= SCALE_MAX;
