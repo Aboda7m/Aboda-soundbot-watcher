@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Capability } from "../access/AccessPolicy.ts";
 import type { ImportService } from "../import/ImportService.ts";
 import { handleImportRoute } from "./importRoutes.ts";
 import { handleLogRoute, type LogFiles } from "./logRoutes.ts";
@@ -27,6 +28,12 @@ export interface PublicDeps extends CoreDeps {
   oauth?: DiscordOAuth;
   /** Called after Discord has proven who the user is. Resolve false to refuse. */
   authorize(userId: string): Promise<boolean>;
+  /**
+   * What this signed-in user may do, asked on every request so a change by the owner applies at once.
+   * `dashboard` = may use the dashboard at all (a user who loses it is signed out), `import` = import page and API,
+   * `logs` = log viewer. Sign-in gets a user in; this decides what they can touch.
+   */
+  can(userId: string, capability: Capability): boolean;
   /** Periodic re-check of live sessions: true keeps, false ends the session (and its streams), null = unknown, keep. */
   recheck?(userId: string): Promise<boolean | null>;
   /** Interval for `recheck`; 0 or unset = never. */
@@ -75,6 +82,13 @@ const PUBLIC_ASSETS: Record<string, StaticEntry> = {
 };
 
 const PAGES = new Set(["/", "/import", "/logs"]);
+
+/** Which owner-granted permission a route needs, beyond being allowed onto the dashboard at all. */
+function requiredCapability(path: string): Capability | null {
+  if (path === "/import" || path === "/import.js" || path === "/import.css" || path.startsWith("/api/import/")) return "import";
+  if (path === "/logs" || path === "/logs.js" || path === "/logs.css" || path.startsWith("/api/logs")) return "logs";
+  return null;
+}
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const LOGIN_TTL_MS = 10 * 60_000;
 const MAX_PENDING_LOGINS = 500;
@@ -112,8 +126,16 @@ export function createPublicServer(d: PublicDeps): Server {
   };
 
   /** The sign-in page (also used to report sign-in problems). Contains only fixed text, never request data. */
-  function loginPage(res: ServerResponse, status: number, message?: string, headers: Record<string, string | string[]> = {}) {
-    const action = d.oauth
+  function loginPage(
+    res: ServerResponse,
+    status: number,
+    message?: string,
+    headers: Record<string, string | string[]> = {},
+    opts: { back?: boolean } = {},
+  ) {
+    const action = opts.back
+      ? `<a class="btn" href="/">Back to the dashboard</a>`
+      : d.oauth
       ? `<a class="btn" href="/auth/login">Login with Discord</a>`
       : `<p class="msg" role="alert">Sign-in is not configured on this server yet. The owner needs to finish the Discord setup described in the README.</p>`;
     const intro = message ? `<p class="msg" role="alert">${esc(message)}</p>` : `<p>Sign in with your Discord account to continue.</p>`;
@@ -260,6 +282,31 @@ export function createPublicServer(d: PublicDeps): Server {
         const wantsPage = !isPost && PAGES.has(url.pathname) && (req.headers.accept ?? "").includes("text/html");
         if (wantsPage) return void res.writeHead(302, { ...SECURITY_HEADERS, Location: "/login" }).end();
         return json(res, 401, { error: "Not signed in", login: "/login" });
+      }
+
+      // Sign-in only proves who you are. What you may do comes from the owner's policy, asked every time.
+      const uid = session.user.id;
+      if (!d.can(uid, "dashboard")) {
+        d.sessions.destroy(session.id); // also ends this user's live streams
+        const gone = { "Set-Cookie": sessionCookie("", 0) };
+        const message = "Your account no longer has access to this dashboard.";
+        if (!isPost && PAGES.has(url.pathname)) return loginPage(res, 403, message, gone, { back: false });
+        res.writeHead(403, { ...SECURITY_HEADERS, ...gone, "Content-Type": "application/json" }).end(JSON.stringify({ error: message }));
+        return;
+      }
+
+      const needs = requiredCapability(url.pathname);
+      if (needs && !d.can(uid, needs)) {
+        const message = `Your account does not have permission to use this (${needs}). Ask the bot owner.`;
+        if (!isPost && PAGES.has(url.pathname)) return loginPage(res, 403, message, {}, { back: true });
+        return json(res, 403, { error: message });
+      }
+
+      if (!isPost && url.pathname === "/api/me") {
+        return json(res, 200, {
+          user: { id: uid, username: session.user.username },
+          can: { import: d.can(uid, "import"), logs: d.can(uid, "logs") },
+        });
       }
 
       const core = {

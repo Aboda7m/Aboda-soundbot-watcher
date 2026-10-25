@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { handleEntrance, handleSoundList, type CommandMessage } from "../src/discord/textCommands.ts";
 import { parseEntranceCommand } from "../src/discord/textCommand.ts";
 import { SoundRepository } from "../src/sound/SoundRepository.ts";
+import { AccessPolicy } from "../src/access/AccessPolicy.ts";
 import type { SoundLibrary } from "../src/sound/SoundLibrary.ts";
 
 const lib = (names: string[]) => ({ list: () => names, has: (n: string) => names.includes(n) }) as unknown as SoundLibrary;
@@ -59,7 +60,7 @@ function setup(names = ["airhorn", "air horn 2", "vine boom"]) {
   writeFileSync(p, JSON.stringify({ entrances: {}, exits: {}, ignoreList: [], sounds: [] }));
   const repo = new SoundRepository(p, { countPlays: false });
   const run = async (text: string, m = fakeMessage()) => {
-    await handleEntrance(m.msg, parseEntranceCommand(text)!, { library: lib(names), repo, prefix: "!" });
+    await handleEntrance(m.msg, parseEntranceCommand(text)!, { library: lib(names), repo, prefix: "!", access: AccessPolicy.inMemory([]) });
     return m.replies[0]!;
   };
   return { repo, run };
@@ -89,17 +90,17 @@ test("!entrance rejects unknown names with suggestions and does not save", async
   assert.equal(repo.entrance("u1"), undefined);
 });
 
-// Targeting another member is now allowed for Manage Server / Administrator (see test/textCommandDispatch.test.ts);
-// a caller without that permission (the fake message has no member) must still be refused and change nothing.
-test("!entrance refuses to target another member without Manage Server or Administrator", async () => {
+// Targeting another member needs an owner grant (see test/textCommandDispatch.test.ts);
+// a caller without it (the fake message has no member) must be refused and change nothing.
+test("!entrance refuses to target another member without the entrance.manage permission", async () => {
   const { repo, run } = setup();
-  assert.match(await run("!entrance <@999>"), /Manage Server or Administrator permission/);
+  assert.match(await run("!entrance <@999>"), /don't have permission to manage another member/);
   assert.equal(repo.entrance("999"), undefined);
   assert.equal(repo.entrance("u1"), undefined);
 });
 
 test("!entrance without a repository degrades gracefully", async () => {
   const m = fakeMessage();
-  await handleEntrance(m.msg, { kind: "entrance-show" }, { library: lib([]), prefix: "!" });
+  await handleEntrance(m.msg, { kind: "entrance-show" }, { library: lib([]), prefix: "!", access: AccessPolicy.inMemory([]) });
   assert.match(m.replies[0]!, /not available/);
 });

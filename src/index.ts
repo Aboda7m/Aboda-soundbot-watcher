@@ -15,6 +15,7 @@ import { createCooldown, planIntros } from "./sound/introRules.ts";
 import { SoundLibrary } from "./sound/SoundLibrary.ts";
 import { SoundQueue } from "./sound/SoundQueue.ts";
 import { SoundRepository } from "./sound/SoundRepository.ts";
+import { AccessPolicy, type Capability } from "./access/AccessPolicy.ts";
 import { checkYtDlp } from "./tools/ytdlp.ts";
 import { DiscordVoiceAdapter } from "./voice/DiscordVoiceAdapter.ts";
 import { Watcher } from "./watcher/Watcher.ts";
@@ -60,6 +61,20 @@ const queue: SoundQueue = new SoundQueue({
   log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
 });
 
+// Who may use the bot (whitelist/blacklist) and who holds which permission. Owners come from .env; the rest is
+// stored in access.json and changed with the owner-only `!access` command (or by editing the file).
+let access: AccessPolicy;
+try {
+  access = new AccessPolicy(config.accessFile, {
+    owners: config.ownerUserIds,
+    log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
+  });
+} catch (err) {
+  console.error(`Refusing to start: ${(err as Error).message}`);
+  console.error("Fix or delete that file and start again.");
+  process.exit(1);
+}
+
 // Automatic intro / outro sounds
 const introAllowed = createCooldown(config.introCooldownMs);
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
@@ -67,6 +82,8 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   try {
     const move = toVoiceMove(oldState, newState);
     if (!move || move.userId === client.user?.id) return;
+    // Same whitelist/blacklist as the text commands: no automatic sounds for servers or users the owner has not allowed.
+    if (!access.canUseBot(move.guildId, move.userId)) return;
     for (const plan of planIntros(move, {
       entrance: (id) => repo.entrance(id),
       exit: (id) => repo.exit(id),
@@ -112,7 +129,7 @@ const importer = config.importEnabled
   : undefined;
 
 try {
-  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo });
+  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo, access });
 } catch (err) {
   console.error(`Refusing to start: ${(err as Error).message}`);
   console.error("Fix the files in src/discord/commands/ and start again.");
@@ -128,13 +145,16 @@ const core = {
   repo,
   queue,
   canTarget: (guildId: string, channelId: string) =>
-    !!client.guilds.cache.get(guildId)?.channels.cache.get(channelId)?.isVoiceBased(),
+    access.guildAllowed(guildId) && !!client.guilds.cache.get(guildId)?.channels.cache.get(channelId)?.isVoiceBased(),
 };
 
 // ---- PUBLIC listener: Discord OAuth2 + server-side sessions (the Cloudflare Tunnel origin) ----
 const sessions = new SessionStore({ maxAgeMs: config.sessionMaxMs });
 const authorizer = createAuthorizer({
-  userIds: config.dashboardUserIds,
+  userIds: config.ownerUserIds,
+  extraAllow: (id) => access.can(id, "dashboard"), // users the owner granted `dashboard` to
+  deny: (id) => access.isBlocked(id),              // blacklisted users, even if a server rule would let them in
+
   guildId: config.dashboardGuildId || undefined,
   roleIds: config.dashboardRoleIds,
   log: logError,
@@ -166,6 +186,7 @@ const publicServer = createPublicServer({
       })
     : undefined,
   authorize: authorizer,
+  can: (userId: string, capability: Capability) => access.can(userId, capability),
   recheck: authorizer.recheck,
   recheckMs: config.sessionRecheckMs,
   importer,

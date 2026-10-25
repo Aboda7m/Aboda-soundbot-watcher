@@ -27,6 +27,19 @@ test("authorize: explicit ids, guild members, role filter; everything else (and 
   assert.equal(await broken("300000000000000001"), false); // sign-in fails closed on a lookup error
 });
 
+test("authorize: extraAllow adds users, deny beats every allow rule (id list, extra, server)", async () => {
+  const a = createAuthorizer({
+    userIds: ["999999999999999999"], guildId: "g", roleIds: [], fetchMember,
+    extraAllow: (id) => id === "300000000000000009",
+    deny: (id) => id === "999999999999999999" || id === "300000000000000001",
+  });
+  assert.equal(await a("300000000000000009"), true);
+  assert.equal(await a("999999999999999999"), false, "an id on the allow list but blocked is refused");
+  assert.equal(await a("300000000000000001"), false, "a server member who is blocked is refused");
+  assert.equal(await a("300000000000000002"), true, "an ordinary server member is still let in");
+  assert.equal(await a.recheck("300000000000000001"), false);
+});
+
 test("authorize.recheck: definite answers revoke or keep, a lookup error keeps (null)", async () => {
   const a = createAuthorizer({ userIds: ["999999999999999999"], guildId: "g", roleIds: ["r1"], fetchMember });
   assert.equal(await a.recheck("999999999999999999"), true);

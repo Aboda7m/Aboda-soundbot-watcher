@@ -76,6 +76,7 @@ export async function startPublic(over: Partial<PublicDeps> = {}): Promise<Publi
     sessions,
     oauth: fakeOAuth,
     authorize: async (id) => id === ALLOWED_USER,
+    can: (id) => id === ALLOWED_USER, // the allowed user may do everything unless a test says otherwise
     ...over,
   });
   await listen(server, port);

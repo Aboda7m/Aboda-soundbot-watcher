@@ -1,18 +1,17 @@
-import { PermissionFlagsBits } from "discord.js";
+import type { AccessPolicy } from "../../access/AccessPolicy.ts";
 import type { SoundLibrary } from "../../sound/SoundLibrary.ts";
 import type { SoundRepository } from "../../sound/SoundRepository.ts";
 import { defineTextCommand, type CommandMessage } from "../commandTypes.ts";
 import { formatChoices, say } from "../commandUtils.ts";
 import { escapeMarkdown, parseEntranceCommand, partialMatches, resolveSoundName } from "../textCommand.ts";
 
-/** Server managers and administrators may configure another member's entrance sound. */
-function canManageEntrances(message: CommandMessage): boolean {
-  const permissions = message.member?.permissions;
-  return Boolean(
-    permissions?.has(PermissionFlagsBits.ManageGuild) ||
-      permissions?.has(PermissionFlagsBits.Administrator),
-  );
-}
+/**
+ * Only the bot's owners, and users the owner explicitly granted `entrance.manage`, may configure ANOTHER
+ * member's entrance sound. Discord's Manage Server / Administrator no longer count: everybody has them
+ * in a server of their own.
+ */
+const canManageEntrances = (message: CommandMessage, access: AccessPolicy): boolean =>
+  access.can(message.author.id, "entrance.manage");
 
 /**
  * Resolves and validates a sound name for an entrance assignment.
@@ -56,9 +55,9 @@ async function setEntranceForUser(
 export async function handleEntrance(
   message: CommandMessage,
   cmd: NonNullable<ReturnType<typeof parseEntranceCommand>>,
-  deps: { library: SoundLibrary; repo?: SoundRepository; prefix: string },
+  deps: { library: SoundLibrary; repo?: SoundRepository; prefix: string; access: AccessPolicy },
 ): Promise<void> {
-  const { library, repo, prefix } = deps;
+  const { library, repo, prefix, access } = deps;
 
   if (!repo) {
     await say(message, "Entrance sounds are not available right now.");
@@ -72,11 +71,8 @@ export async function handleEntrance(
     cmd.kind === "entrance-target-set" ||
     cmd.kind === "entrance-target-clear"
   ) {
-    if (!canManageEntrances(message)) {
-      await say(
-        message,
-        "You need the Manage Server or Administrator permission to manage another member's entrance sound.",
-      );
+    if (!canManageEntrances(message, access)) {
+      await say(message, "You don't have permission to manage another member's entrance sound. Ask the bot owner to grant it.");
       return;
     }
 
@@ -133,7 +129,7 @@ export async function handleEntrance(
   if (cmd.kind === "entrance-mention") {
     await say(
       message,
-      `To manage another user's entrance sound, mention them with a sound or \`!clear\`, e.g. \`${prefix}entrance @User sound-name\` (requires Manage Server permission).`,
+      `To manage another user's entrance sound, mention them with a sound or \`!clear\`, e.g. \`${prefix}entrance @User sound-name\` (needs a permission from the bot owner).`,
     );
     return;
   }
@@ -150,6 +146,6 @@ export default defineTextCommand({
   description: "Show, set or clear an entrance sound (managing others needs Manage Server)",
   parse: parseEntranceCommand,
   execute: async ({ message, deps }, cmd) => {
-    await handleEntrance(message, cmd, { library: deps.library, repo: deps.repo, prefix: deps.prefix });
+    await handleEntrance(message, cmd, { library: deps.library, repo: deps.repo, prefix: deps.prefix, access: deps.access });
   },
 });

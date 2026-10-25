@@ -30,6 +30,10 @@ export interface Config {
   hideBots: boolean;
   soundsDir: string;
   dbPath: string;
+  /** Runtime-editable access policy (whitelist/blacklist/permissions). */
+  accessFile: string;
+  /** Bot owners: full control, never blocked. OWNER_USER_IDS plus the legacy DASHBOARD_ALLOWED_USER_IDS. */
+  ownerUserIds: string[];
   acceptedExtensions: string[];
   introsEnabled: boolean;
   introCooldownMs: number;
@@ -98,6 +102,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hideBots: flag(env.HIDE_BOTS, false),
     soundsDir: resolve(env.SOUNDS_DIR ?? "./sounds"),
     dbPath: resolve(env.DB_PATH ?? "./db.json"),
+    accessFile: resolve(env.ACCESS_FILE ?? "./access.json"),
+    ownerUserIds: [...new Set([...list(env.OWNER_USER_IDS), ...list(env.DASHBOARD_ALLOWED_USER_IDS)])],
     acceptedExtensions: (env.ACCEPTED_EXTENSIONS ?? ".mp3,.wav")
       .split(",")
       .map((e) => e.trim().toLowerCase())
@@ -163,8 +169,8 @@ export function checkNetworkConfig(c: Config): NetworkCheck {
   if (c.ignoredLegacyHost) {
     warnings.push(`HOST=${c.ignoredLegacyHost} was ignored: the public listener stays on 127.0.0.1 (the tunnel origin). Remove HOST from .env, or set PUBLIC_HOST to choose a different address deliberately. For LAN devices use LOCAL_HOST (local listener).`);
   }
-  if (c.dashboardUserIds.length === 0 && !c.dashboardGuildId) {
-    warnings.push("No DASHBOARD_ALLOWED_USER_IDS or DASHBOARD_GUILD_ID set: nobody is authorized to sign in to the public dashboard.");
+  if (c.ownerUserIds.length === 0 && !c.dashboardGuildId) {
+    warnings.push("No OWNER_USER_IDS, DASHBOARD_ALLOWED_USER_IDS or DASHBOARD_GUILD_ID set: nobody is authorized to sign in to the public dashboard, and nobody can use the !access command or import sounds.");
   }
   if (c.dashboardRoleIds.length > 0 && !c.dashboardGuildId) {
     warnings.push("DASHBOARD_ROLE_IDS is ignored without DASHBOARD_GUILD_ID.");

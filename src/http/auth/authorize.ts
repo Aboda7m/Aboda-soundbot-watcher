@@ -10,6 +10,10 @@ export interface AuthorizeOptions {
    * "unknown", not "no".
    */
   fetchMember(guildId: string, userId: string): Promise<{ roles: string[] } | null>;
+  /** Extra yes (e.g. the owner-managed policy grants dashboard access). */
+  extraAllow?(userId: string): boolean;
+  /** A yes/no that beats everything else: a blocked user is refused even if a server or id rule would allow them. */
+  deny?(userId: string): boolean;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -25,7 +29,8 @@ export type Authorizer = ((userId: string) => Promise<boolean>) & {
  */
 export function createAuthorizer(o: AuthorizeOptions): Authorizer {
   const decide = async (userId: string): Promise<"allow" | "deny" | "unknown"> => {
-    if (o.userIds.includes(userId)) return "allow";
+    if (o.deny?.(userId)) return "deny";
+    if (o.userIds.includes(userId) || o.extraAllow?.(userId)) return "allow";
     if (!o.guildId) return "deny";
     try {
       const member = await o.fetchMember(o.guildId, userId);

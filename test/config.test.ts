@@ -20,6 +20,15 @@ test("config: defaults are public 127.0.0.1:3939 and local 127.0.0.1:3940", () =
   assert.deepEqual(check.warnings, []);
 });
 
+test("config: owners are OWNER_USER_IDS plus the legacy DASHBOARD_ALLOWED_USER_IDS; the policy file defaults next to the app", () => {
+  const c = loadConfig({ OWNER_USER_IDS: "333333333333333333 444444444444444444", DASHBOARD_ALLOWED_USER_IDS: "444444444444444444,555555555555555555" });
+  assert.deepEqual(c.ownerUserIds, ["333333333333333333", "444444444444444444", "555555555555555555"]);
+  assert.match(c.accessFile, /access\.json$/);
+  assert.match(loadConfig({ ACCESS_FILE: "./data/rules.json" }).accessFile, /rules\.json$/);
+  assert.match(checkNetworkConfig(loadConfig({})).warnings.join("\n"), /nobody is authorized to sign in.*!access/);
+  assert.doesNotMatch(checkNetworkConfig(loadConfig({ OWNER_USER_IDS: "333333333333333333" })).warnings.join("\n"), /nobody is authorized/);
+});
+
 test("config: the legacy ACCESS_KEY only ever becomes the LOCAL key", () => {
   const c = loadConfig({ ...full, LOCAL_ACCESS_KEY: undefined, ACCESS_KEY: "old-key-old-key-old-key-1234" });
   assert.equal(c.localAccessKey, "old-key-old-key-old-key-1234");

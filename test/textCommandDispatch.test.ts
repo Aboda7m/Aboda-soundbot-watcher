@@ -12,10 +12,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PermissionFlagsBits, type Client } from "discord.js";
 import { registerTextCommands } from "../src/discord/textCommands.ts";
+import { AccessPolicy } from "../src/access/AccessPolicy.ts";
 import { SoundRepository } from "../src/sound/SoundRepository.ts";
 import type { SoundLibrary } from "../src/sound/SoundLibrary.ts";
 import type { EnqueueResult, PlayRequest, SoundQueue } from "../src/sound/SoundQueue.ts";
 import type { ImportService } from "../src/import/ImportService.ts";
+
+/** Default caller. A real-looking Discord id, because the access policy only stores valid ids. */
+const U1 = "100000000000000001";
 
 const NAMES = ["airhorn", "air horn 2", "vine boom"];
 
@@ -23,6 +27,8 @@ interface MsgOpts {
   authorId?: string;
   bot?: boolean;
   inGuild?: boolean;
+  /** Server id (default "g1"; the access tests use real-looking snowflakes). */
+  guildId?: string;
   /** Permission bits the author holds. `null` = no member object at all. */
   perms?: bigint[] | null;
   /** Voice channel the author is in. */
@@ -43,14 +49,14 @@ function makeMessage(content: string, o: MsgOpts = {}) {
   const message = {
     content,
     author: {
-      id: o.authorId ?? "u1",
+      id: o.authorId ?? U1,
       bot: o.bot ?? false,
       send: async (c: string) => {
         if (o.dmFails) throw new Error("Cannot send messages to this user");
         sent.dms.push(c);
       },
     },
-    guild: o.inGuild === false ? null : { id: "g1" },
+    guild: o.inGuild === false ? null : { id: o.guildId ?? "g1" },
     member:
       perms === null
         ? null
@@ -74,6 +80,8 @@ interface SetupOpts {
   withRepo?: boolean;
   importer?: Partial<Record<"status" | "importYouTube" | "process" | "save", unknown>> | null;
   enqueue?: (req: PlayRequest) => EnqueueResult;
+  /** Default: owner "owner1"; user U1 holds only the `import` grant. */
+  access?: AccessPolicy;
 }
 
 async function setup(o: SetupOpts = {}) {
@@ -122,9 +130,17 @@ async function setup(o: SetupOpts = {}) {
   const importer =
     o.importer === null ? undefined : ({ ...defaultImporter, ...(o.importer ?? {}) } as unknown as ImportService);
 
+  const access =
+    o.access ??
+    (() => {
+      const a = AccessPolicy.inMemory(["owner1"]);
+      a.grant(U1, "import");
+      return a;
+    })();
+
   await registerTextCommands(
     client,
-    { library, queue, prefix, importer, repo: o.withRepo === false ? undefined : repo },
+    { library, queue, prefix, importer, repo: o.withRepo === false ? undefined : repo, access },
     { log: () => {} },
   );
 
@@ -137,7 +153,7 @@ async function setup(o: SetupOpts = {}) {
     await listener.fn(message);
     return sent;
   };
-  return { send, enqueued, repo, importCalls, invalidated: () => invalidated };
+  return { send, enqueued, repo, importCalls, access, invalidated: () => invalidated };
 }
 
 const ADMIN = [PermissionFlagsBits.Administrator];
@@ -286,26 +302,26 @@ test("!entrance: caller shows, sets (canonical name), replaces and clears their 
   };
   assert.equal(await say("!entrance"), "You have no entrance sound set. Set one with `!entrance <sound>`.");
   assert.equal(await say("!entrance vine boom"), "Your's entrance sound is now **vine boom**.");
-  assert.equal(repo.entrance("u1"), "vine boom");
+  assert.equal(repo.entrance(U1), "vine boom");
   assert.equal(
     await say("!entrance"),
     "Your entrance sound is **vine boom**. Change it with `!entrance <sound>` or clear it with `!entrance !clear`.",
   );
   assert.equal(await say("!entrance AIRHORN"), "Your's entrance sound is now **airhorn**.");
-  assert.equal(repo.entrance("u1"), "airhorn");
+  assert.equal(repo.entrance(U1), "airhorn");
   assert.equal(await say("!entrance !clear"), "Cleared your entrance sound.");
-  assert.equal(repo.entrance("u1"), undefined);
-  repo.setEntrance("u1", "vine boom");
+  assert.equal(repo.entrance(U1), undefined);
+  repo.setEntrance(U1, "vine boom");
   assert.equal(await say("!RM-entrance"), "Cleared your entrance sound.");
-  assert.equal(repo.entrance("u1"), undefined);
-  repo.setEntrance("u1", "vine boom");
+  assert.equal(repo.entrance(U1), undefined);
+  repo.setEntrance(U1, "vine boom");
   assert.equal(await say("!rm-entrance with trailing words"), "Cleared your entrance sound.");
-  assert.equal(repo.entrance("u1"), undefined);
+  assert.equal(repo.entrance(U1), undefined);
 });
 
 test("!entrance: stale assignment is reported, unknown/partial/ambiguous names never save", async () => {
   const { send, repo } = await setup({ names: ["airhorn", "air horn 2", "vine boom", "Bruh", "bruh"] });
-  repo.setEntrance("u1", "gone");
+  repo.setEntrance(U1, "gone");
   assert.equal(
     (await send("!entrance")).replies[0]!.content,
     "Your entrance sound is **gone** (that sound no longer exists, so nothing will play). Change it with `!entrance <sound>` or clear it with `!entrance !clear`.",
@@ -319,23 +335,26 @@ test("!entrance: stale assignment is reported, unknown/partial/ambiguous names n
     (await send("!entrance BRUH")).replies[0]!.content,
     "Several sounds are named like that: **Bruh**, **bruh**. Use the exact name.",
   );
-  assert.equal(repo.entrance("u1"), "gone");
+  assert.equal(repo.entrance(U1), "gone");
 });
 
-test("!entrance: managing another member requires Manage Server or Administrator", async () => {
-  const { send, repo } = await setup();
-  const denied = "You need the Manage Server or Administrator permission to manage another member's entrance sound.";
+test("!entrance: managing another member needs an owner grant; Discord Administrator / Manage Server no longer count", async () => {
+  const { send, repo, access } = await setup();
+  const denied = "You don't have permission to manage another member's entrance sound. Ask the bot owner to grant it.";
   for (const t of ["!entrance <@999>", "!entrance <@999> vine boom", "!entrance <@999> !clear", "!entrance <@!999> vine boom"]) {
-    for (const perms of [[], null] as (bigint[] | null)[]) {
+    // no member, no permissions, and (the old way in) Administrator / Manage Server: all refused
+    for (const perms of [[], null, ADMIN, MANAGER] as (bigint[] | null)[]) {
       const s = await send(t, { perms });
-      assert.deepEqual(s.replies, [{ content: denied, noMentions: true }], t);
+      assert.deepEqual(s.replies, [{ content: denied, noMentions: true }], `${t} ${String(perms)}`);
     }
   }
   assert.equal(repo.entrance("999"), undefined);
-  assert.equal(repo.entrance("u1"), undefined);
+  assert.equal(repo.entrance(U1), undefined);
 
-  for (const perms of [MANAGER, ADMIN]) {
-    const say = async (t: string) => (await send(t, { perms })).replies[0]!.content;
+  // a user holding the grant, and an owner, may manage others; the Discord permission bits are irrelevant
+  access.grant(U1, "entrance.manage");
+  for (const authorId of [U1, "owner1"]) {
+    const say = async (t: string) => (await send(t, { authorId, perms: [] })).replies[0]!.content;
     assert.equal(await say("!entrance <@999>"), "<@999> has no entrance sound set.");
     assert.equal(await say("!entrance <@999> vine boom"), "<@999>'s entrance sound is now **vine boom**.");
     assert.equal(repo.entrance("999"), "vine boom");
@@ -343,14 +362,18 @@ test("!entrance: managing another member requires Manage Server or Administrator
     assert.equal(await say("!entrance <@!999> AIRHORN"), "<@999>'s entrance sound is now **airhorn**.");
     assert.equal(await say("!entrance <@999> !clear"), "Cleared <@999>'s entrance sound.");
     assert.equal(repo.entrance("999"), undefined);
-    assert.equal(repo.entrance("u1"), undefined, "the caller's own entrance is untouched");
+    assert.equal(repo.entrance(authorId), undefined, "the caller's own entrance is untouched");
   }
+
+  // taking the grant away takes the ability away at once
+  access.revoke(U1, "entrance.manage");
+  assert.deepEqual((await send("!entrance <@999> vine boom")).replies, [{ content: denied, noMentions: true }]);
 });
 
 test("!entrance: a bare mention or @everyone explains the syntax; permission is not required for that", async () => {
   const { send } = await setup();
   const help =
-    "To manage another user's entrance sound, mention them with a sound or `!clear`, e.g. `!entrance @User sound-name` (requires Manage Server permission).";
+    "To manage another user's entrance sound, mention them with a sound or `!clear`, e.g. `!entrance @User sound-name` (needs a permission from the bot owner).";
   for (const t of ["!entrance @everyone", "!entrance @here", "!entrance <@&55>"]) {
     assert.deepEqual((await send(t)).replies, [{ content: help, noMentions: true }], t);
   }
@@ -440,4 +463,139 @@ test("!import: failures edit the progress message instead of throwing", async ()
     },
   });
   assert.deepEqual((await odd.send("!import https://x.test/v")).edits, ["❌ Import failed: Unknown error occurred."]);
+});
+
+// ───────────────────────────── permissions for !import ─────────────────────────────
+
+test("!import needs the owner's `import` grant: nobody else may add sounds, whatever their Discord permissions", async () => {
+  const { send, importCalls, access } = await setup();
+  const denied = "You don't have permission to import sounds. Ask the bot owner to grant it.";
+  for (const perms of [[], null, ADMIN, MANAGER] as (bigint[] | null)[]) {
+    const s = await send("!import https://x.test/v", { authorId: "stranger", perms });
+    assert.deepEqual(s.replies.map((r) => r.content), [denied], String(perms));
+  }
+  assert.deepEqual(importCalls.urls, [], "nothing was downloaded");
+  // u1 holds the grant (see setup), owners always may
+  assert.ok((await send("!import https://x.test/v", { authorId: U1 })).edits.length > 0);
+  assert.ok((await send("!import https://x.test/v2", { authorId: "owner1" })).edits.length > 0);
+  access.revoke(U1, "import");
+  assert.deepEqual((await send("!import https://x.test/v3", { authorId: U1 })).replies.map((r) => r.content), [denied]);
+});
+
+// ───────────────────────────── whitelist / blacklist ─────────────────────────────
+
+test("by default the bot is global: any server and user may use it", async () => {
+  const { send, enqueued } = await setup({ access: AccessPolicy.inMemory([]) });
+  assert.equal((await send('!sound "airhorn"', { authorId: "anyone" })).reactions.length, 1);
+  assert.equal(enqueued.length, 1);
+});
+
+test("whitelist ON: only allowed servers or allowed users are answered; owners always are; OFF restores global use", async () => {
+  const access = AccessPolicy.inMemory(["owner1"]);
+  const { send, enqueued } = await setup({ access });
+  const GID = "123456789012345670";
+  const play = (authorId: string) => send('!sound "airhorn"', { authorId, guildId: GID });
+
+  access.setWhitelist(true);
+  for (const who of [U1, "u2"]) {
+    const s = await play(who);
+    assert.deepEqual([s.replies.length, s.reactions.length, s.dms.length], [0, 0, 0], `${who} gets no reaction at all`);
+  }
+  assert.equal((await send("!entrance", { authorId: U1, guildId: GID })).replies.length, 0, "every command is gated, not just !sound");
+  assert.equal(enqueued.length, 0);
+  assert.equal((await play("owner1")).reactions.length, 1, "owners bypass the whitelist");
+
+  access.allowUser("333333333333333333");
+  assert.equal((await play("333333333333333333")).reactions.length, 1, "an allowed user works in any server");
+  assert.equal((await play("u2")).reactions.length, 0);
+
+  access.allowGuild("123456789012345671"); // a different server
+  assert.equal((await play("u2")).reactions.length, 0, "an allowed OTHER server does not help");
+  access.allowGuild(GID);
+  assert.equal((await play("u2")).reactions.length, 1, "an allowed server works for everyone in it");
+  access.unallowGuild(GID);
+  assert.equal((await play("u2")).reactions.length, 0);
+
+  access.setWhitelist(false);
+  assert.equal((await play("u2")).reactions.length, 1, "switching it off makes the bot global again, no restart");
+});
+
+test("blacklist ON: blocked users are ignored; OFF ignores the list; owners cannot be blocked", async () => {
+  const access = AccessPolicy.inMemory(["owner1"]);
+  const { send } = await setup({ access });
+  const play = (authorId: string) => send('!sound "airhorn"', { authorId });
+  access.blockUser("111111111111111111");
+  assert.equal((await play("111111111111111111")).reactions.length, 1, "a list does nothing while the blacklist is off");
+  access.setBlacklist(true);
+  assert.equal((await play("111111111111111111")).reactions.length, 0);
+  assert.equal((await play("u2")).reactions.length, 1);
+  assert.equal(access.blockUser("owner1"), false);
+  assert.equal((await play("owner1")).reactions.length, 1);
+  access.setBlacklist(false);
+  assert.equal((await play("111111111111111111")).reactions.length, 1);
+});
+
+// ───────────────────────────── !access (owner only) ─────────────────────────────
+
+test("!access is silent for non-owners, including server administrators", async () => {
+  const { send, access } = await setup();
+  for (const perms of [[], ADMIN, MANAGER] as bigint[][]) {
+    for (const t of ["!access", "!access whitelist on", "!access grant 111111111111111111 import", "!access allow server here"]) {
+      const s = await send(t, { authorId: U1, perms });
+      assert.deepEqual([s.replies.length, s.dms.length], [0, 0], t);
+    }
+  }
+  assert.equal(access.snapshot().whitelistEnabled, false);
+  assert.deepEqual(access.snapshot().grants, { [U1]: ["import"] });
+});
+
+test("!access: owner toggles whitelist/blacklist, manages lists and grants; replies never ping anyone", async () => {
+  const { send, access } = await setup();
+  const GID = "123456789012345670";
+  const o = async (t: string) => (await send(t, { authorId: "owner1", guildId: GID }));
+  const text = async (t: string) => (await o(t)).replies[0]!.content;
+  const U = "444444444444444444", G2 = "555555555555555555";
+
+  assert.match(await text("!access"), /Whitelist: \*\*off\*\*.*bot works everywhere/s);
+  assert.match(await text("!access whitelist on"), /Whitelist is now \*\*ON\*\*\. Nobody except owners .* allow server here/);
+  assert.equal(access.snapshot().whitelistEnabled, true);
+  assert.match(await text("!access allow server here"), new RegExp(`Server ${GID} is now allowed`));
+  assert.match(await text(`!access allow server ${G2}`), new RegExp(`Server ${G2} is now allowed`));
+  assert.deepEqual(access.snapshot().allowedGuilds.sort(), [GID, G2].sort());
+  assert.match(await text(`!access allow user <@${U}>`), /is now allowed/);
+  assert.deepEqual(access.snapshot().allowedUsers, [U]);
+  assert.match(await text(`!access unallow user ${U}`), /no longer on the allow list/);
+  assert.match(await text("!access whitelist off"), /off/);
+
+  assert.match(await text("!access blacklist on"), /ON/);
+  assert.match(await text(`!access block user <@!${U}>`), /is now blocked/);
+  assert.match(await text("!access block user not-an-id"), /Mention the user or give their id/);
+  assert.match(await text(`!access unblock user ${U}`), /no longer blocked/);
+
+  assert.match(await text(`!access grant <@${U}> import`), /now has \*\*import\*\*/);
+  assert.match(await text(`!access grant ${U} entrance.manage`), /now has \*\*entrance.manage\*\*/);
+  assert.deepEqual(access.snapshot().grants[U], ["import", "entrance.manage"]);
+  assert.match(await text(`!access revoke ${U} import`), /no longer has \*\*import\*\*/);
+  assert.deepEqual(access.snapshot().grants[U], ["entrance.manage"]);
+  assert.match(await text(`!access grant ${U} administrator`), /Usage: .*dashboard\|import\|entrance.manage\|logs/);
+  assert.match(await text("!access allow nonsense"), /server.*user/);
+  assert.match(await text("!access frobnicate"), /Access control/);
+
+  const every = await o(`!access grant ${U} logs`);
+  assert.ok(every.replies.every((r) => r.noMentions));
+  const list = await o("!access list");
+  assert.equal(list.dms.length, 1);
+  assert.match(list.dms[0]!, new RegExp(U));
+  assert.match(list.replies[0]!.content, /Sent you a DM/);
+  assert.match((await send("!access list", { authorId: "owner1", dmFails: true })).replies[0]!.content, /couldn't DM/);
+});
+
+test("!access: a blocked-but-owner can still run it with the whitelist on and empty (no lock-out)", async () => {
+  const access = AccessPolicy.inMemory(["owner1"]);
+  const { send } = await setup({ access });
+  access.setWhitelist(true);
+  access.setBlacklist(true);
+  const s = await send("!access whitelist off", { authorId: "owner1" });
+  assert.match(s.replies[0]!.content, /off/);
+  assert.equal(access.snapshot().whitelistEnabled, false);
 });

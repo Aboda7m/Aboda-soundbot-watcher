@@ -31,6 +31,9 @@ export async function handleTextMessage(
   try {
     if (message.author.bot || !message.guild) return;
 
+    // Whitelist / blacklist: servers and users the owner has not allowed (or has blocked) get no reaction at all.
+    if (!deps.access.canUseBot(message.guild.id, message.author.id)) return;
+
     const word = commandWord(message.content, deps.prefix);
     if (word === null) return;
     const entry = registry.lookup(word);

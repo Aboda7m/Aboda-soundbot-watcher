@@ -6,7 +6,13 @@ export default defineTextCommand({
   description: "Import a YouTube URL as a sound, optionally trimmed: !import <URL> [from X to Y]",
   parse: parseImportCommand,
   execute: async ({ message, deps }, importCmd) => {
-    const { library, prefix, importer } = deps;
+    const { library, prefix, importer, access } = deps;
+
+    // Adding sounds changes the shared library for every server, so it needs an explicit grant from the owner.
+    if (!access.can(message.author.id, "import")) {
+      await message.reply("You don't have permission to import sounds. Ask the bot owner to grant it.");
+      return;
+    }
 
     if (!importer) {
       await message.reply("The YouTube import service is disabled on this server.");

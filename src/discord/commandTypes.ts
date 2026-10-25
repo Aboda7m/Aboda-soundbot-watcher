@@ -5,6 +5,7 @@
  * `defineTextCommand({ ... })`. Nothing else needs editing; the file is discovered at startup.
  * See README.md ("Adding a text command") for a worked example.
  */
+import type { AccessPolicy } from "../access/AccessPolicy.ts";
 import type { ImportService } from "../import/ImportService.ts";
 import type { SoundLibrary } from "../sound/SoundLibrary.ts";
 import type { SoundQueue } from "../sound/SoundQueue.ts";
@@ -65,6 +66,8 @@ export interface CommandDeps {
   /** Absent when IMPORT_ENABLED=0. */
   importer?: ImportService;
   repo?: SoundRepository;
+  /** Who may use the bot and who holds which permission. Decided by user id, never by Discord permissions. */
+  access: AccessPolicy;
 }
 
 /** Everything `execute` receives. Only messages from a guild (server) channel reach a command. */

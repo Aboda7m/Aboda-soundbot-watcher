@@ -385,3 +385,5 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px max(20px, env(safe-area-
 
 .q-current { flex-wrap: wrap; }
 .q-current .q-sound { flex: 1 1 160px; }
+/* elements hidden by script (e.g. buttons the signed-in user has no permission for) must really disappear */
+[hidden] { display: none !important; }

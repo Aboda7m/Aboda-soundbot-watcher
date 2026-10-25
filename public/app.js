@@ -1471,3 +1471,15 @@ renderQueue();
 loadSounds();
 refreshPlayback().catch((err) => console.warn("Initial queue refresh failed:", err));
 connect();
+
+/* ---------- hide the Import / Logs buttons from people the bot owner has not given those permissions ---------- */
+fetch("/api/me", { cache: "no-store" })
+  .then((r) => (r.ok ? r.json() : null))
+  .then((me) => {
+    if (!me) return;
+    for (const [id, allowed] of [["importSoundsButton", me.can?.import], ["logsButton", me.can?.logs]]) {
+      const el = document.getElementById(id);
+      if (el && allowed === false) el.hidden = true;
+    }
+  })
+  .catch(() => {});

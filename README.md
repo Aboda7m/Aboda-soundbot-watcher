@@ -134,9 +134,13 @@ rewriting your file (PowerShell, from the project folder; edit the values afterw
 
     Add-Content .env "`nPUBLIC_BASE_URL=https://dash.example.com`nDISCORD_CLIENT_ID=`nDISCORD_CLIENT_SECRET=`nDASHBOARD_ALLOWED_USER_IDS="
 
-**Who is authorized.** After Discord proves who you are, the server (not the browser) decides: your Discord user id is in
-`DASHBOARD_ALLOWED_USER_IDS`, or you are a member of `DASHBOARD_GUILD_ID` (the bot must be in that server) and, if `DASHBOARD_ROLE_IDS`
-is set, hold one of those roles. Membership is looked up by the bot, so no extra OAuth scope is needed. Client-supplied identities are never trusted.
+**Who may sign in.** After Discord proves who you are, the server (never the browser) decides: you are an **owner**
+(`OWNER_USER_IDS`, or the older `DASHBOARD_ALLOWED_USER_IDS`), or the owner gave you the `dashboard` permission (see
+[Access control](#access-control-who-may-use-the-bot-and-who-may-do-what)), or you are a member of `DASHBOARD_GUILD_ID` (the bot
+must be in that server; optionally holding one of `DASHBOARD_ROLE_IDS`). Guild members get the dashboard (view and play) only; import
+and logs always need a grant. A blocked user is refused whatever else applies. Client-supplied identities are never trusted.
+**"Access denied. This Discord account is not allowed" means none of those matched your Discord user id.**
+Put your own id in `OWNER_USER_IDS` (Discord > Settings > Advanced > Developer Mode, then right-click yourself > Copy User ID).
 
 **Tunnel setup.** Point the tunnel at `http://127.0.0.1:3939` and leave Cloudflare's *HTTP Host Header* origin setting empty (its default),
 so the original hostname reaches the server. Only the tunnel hostname is served: any other `Host` gets HTTP 421.
@@ -166,6 +170,49 @@ exactly your site. `POST /auth/logout`, expiry or revocation also close that ses
 the role or leaving the server ends the session (and its stream) within that interval. If Discord cannot be reached the check is
 inconclusive and sessions are kept until they expire. Removing a user id from `DASHBOARD_ALLOWED_USER_IDS` needs a bot restart (which
 ends all sessions anyway).
+
+### Access control: who may use the bot and who may do what
+
+Everything is decided by Discord **user and server ids** that you choose. Discord's own "administrator" / "Manage Server" is never
+consulted, because everybody is an administrator of their own server. (Ids, not usernames: a username can be changed or imitated, an id cannot.)
+
+**Owners** are the ids in `OWNER_USER_IDS` in `.env` (comma separated). Owners can do everything, bypass the whitelist and blacklist, and cannot be
+blocked, so you cannot lock yourself out. Nobody becomes an owner from inside Discord.
+
+**Two switches, both off by default, so the bot is global like before.** Turn them on and off whenever you like; no restart:
+
+| Switch | When ON |
+|---|---|
+| whitelist | the bot only reacts in **allowed servers**, or to **allowed users** anywhere. Commands *and* automatic entrance/exit sounds, and dashboard playback targets |
+| blacklist | **blocked servers** and **blocked users** are ignored everywhere. A blocked user also loses dashboard access and every permission |
+
+The lists can be filled while a switch is off. Not-allowed and blocked people get no reply at all.
+
+**Permissions** (granted per user id; owners have all of them):
+
+| Permission | Lets the user |
+|---|---|
+| `dashboard` | sign in to the web dashboard, see it and play sounds |
+| `import` | add sounds to the shared library: `!import` and the dashboard Import page |
+| `entrance.manage` | set or clear **someone else's** entrance sound (`!entrance @user ...`) |
+| `logs` | open the dashboard Logs page |
+
+Everyone else can still play sounds and set their **own** entrance sound (as long as the whitelist/blacklist let them in). Before this
+change `!import` had no permission check at all and `!entrance @user` relied on Manage Server; both now need the grants above.
+
+**Owner-only commands** (anyone else gets no reply). Mention the user or paste their id; `here` means the server you type it in:
+
+    !access                                  show the current settings         !access list   (DM with every id)
+    !access whitelist on|off                 !access blacklist on|off
+    !access allow|unallow server <id|here>   !access allow|unallow user <@user|id>
+    !access block|unblock server <id|here>   !access block|unblock user <@user|id>
+    !access grant|revoke <@user|id> <dashboard|import|entrance.manage|logs>
+
+Typical use: `!access whitelist on`, then `!access allow server here` in each server you trust; later `!access whitelist off` to go global again.
+
+The settings live in `access.json` (`ACCESS_FILE` to move it). You can edit it by hand while the bot runs (a broken edit is reported and the
+previous rules stay in force; a broken file at startup stops the bot instead of guessing). Changes made by `!access` or by hand apply
+immediately to commands and to dashboard requests. A user who loses `dashboard` or is blocked is signed out on their next request.
 
 ### Local integration API
 

@@ -1,3 +1,4 @@
+import { AccessPolicy } from "../src/access/AccessPolicy.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -39,10 +40,11 @@ const problemsOf = async (dir: URL): Promise<readonly string[]> => {
 
 // ───────────────────────────── real commands folder ─────────────────────────────
 
-test("the shipped commands folder loads: sound, soundlist, entrance (+rm-entrance), import", async () => {
+test("the shipped commands folder loads: access, sound, soundlist, entrance (+rm-entrance), import", async () => {
   const registry = await loadCommands();
-  assert.deepEqual(registry.commands.map((c) => c.command.names[0]), ["entrance", "import", "sound", "soundlist"]);
+  assert.deepEqual(registry.commands.map((c) => c.command.names[0]), ["access", "entrance", "import", "sound", "soundlist"]);
   assert.deepEqual(registry.commands.map((c) => c.file), [
+    "access.command.ts",
     "entrance.command.ts",
     "import.command.ts",
     "sound.command.ts",
@@ -53,7 +55,7 @@ test("the shipped commands folder loads: sound, soundlist, entrance (+rm-entranc
   assert.notEqual(registry.lookup("sound"), registry.lookup("soundlist"));
   assert.equal(registry.lookup("RM-entrance"), undefined, "lookup keys are lowercase; the dispatcher lowercases the typed word");
   assert.equal(registry.lookup("nope"), undefined);
-  assert.equal(describeRegistry(registry), "entrance (+rm-entrance), import, sound, soundlist");
+  assert.equal(describeRegistry(registry), "access, entrance (+rm-entrance), import, sound, soundlist");
 });
 
 // ───────────────────────────── discovery ─────────────────────────────
@@ -199,7 +201,7 @@ test("a command file dropped into the folder is discovered, aliased, routed and 
   const listeners: ((m: unknown) => unknown)[] = [];
   const client = { on: (_e: string, fn: (m: unknown) => unknown) => void listeners.push(fn) } as unknown as Client;
   const lines: string[] = [];
-  const deps = { prefix: "!" } as unknown as CommandDeps;
+  const deps = { prefix: "!", access: AccessPolicy.inMemory([]) } as unknown as CommandDeps;
   await registerTextCommands(client, deps, { commandsDir: dir, log: (l) => lines.push(l) });
   assert.deepEqual(lines, ['Text commands (prefix "!"): boom, never, ping (+pong)']);
   assert.equal(listeners.length, 1);
