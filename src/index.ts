@@ -198,8 +198,14 @@ const publicServer = createPublicServer({
 });
 
 // ---- LOCAL listener: access key in a header, playback/voice API only ----
+const localSessions = new SessionStore({ maxAgeMs: config.sessionMaxMs });
 const localServer = config.localEnabled
-  ? createLocalServer({ ...core, host: config.localHost, accessKey: config.localAccessKey })
+  ? createLocalServer({
+      ...core,
+      host: config.localHost,
+      accessKey: config.localAccessKey,
+      dashboard: config.localDashboard ? { sessions: localSessions } : undefined,
+    })
   : undefined;
 
 publicServer.listen(config.publicPort, config.publicHost, () => {
@@ -213,7 +219,7 @@ publicServer.listen(config.publicPort, config.publicHost, () => {
 
 if (localServer) {
   localServer.listen(config.localPort, config.localHost, () =>
-    console.log(`Local integration API: listening on ${config.localHost}:${config.localPort} (X-Access-Key header required)`),
+    console.log(`Local integration API: listening on ${config.localHost}:${config.localPort} (X-Access-Key header for tools${config.localDashboard ? "; browsers sign in with the key at /" : ""})`),
   );
 } else {
   console.log("Local integration API: off (set LOCAL_ACCESS_KEY to enable it).");
@@ -237,6 +243,7 @@ async function shutdown(signal: string) {
   publicServer.close();
   localServer?.close();
   sessions.close();
+  localSessions.close();
   importer?.close();
   await client.destroy();
   process.exit(0);

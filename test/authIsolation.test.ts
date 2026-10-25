@@ -86,5 +86,7 @@ test("isolation: the public listener's source and frontend contain no access-key
   // and the local listener never reads credentials from the URL
   const local = read("src/http/localServer.ts").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
   assert.doesNotMatch(local, /searchParams/);
-  assert.doesNotMatch(local, /cookie/i);
+  // ...and shares nothing with the public listener's Discord login (it has its own cookie name and its own session store)
+  assert.doesNotMatch(local, /discordOAuth|authorize\.ts|from "\.\/server\.ts"|aboda_sid|Discord/);
+  assert.match(local, /aboda_local_sid/);
 });

@@ -82,8 +82,8 @@ Do not run the legacy bot and this one against the same db.json at the same time
 |---|---|---|
 | Default address | `127.0.0.1:3939` (`PUBLIC_HOST`, `PORT`) | `127.0.0.1:3940` (`LOCAL_HOST`, `LOCAL_PORT`) |
 | Meant for | browsers, through the Cloudflare Tunnel | scripts, dev tools, the Nexus panel on this PC / LAN |
-| Authentication | **Discord OAuth2** + server-side session cookie. Nothing else. | `X-Access-Key` **header** on every request |
-| Routes | dashboard pages, `/api/*`, `/events`, `/import`, `/logs`, `/auth/*` | only `/api/voice`, `/api/sounds`, `/api/status`, `/api/play`, `/api/queue/*`, `/events` |
+| Authentication | **Discord OAuth2** + server-side session cookie. Nothing else. | tools: `X-Access-Key` **header**; browsers: type the key once on the sign-in page, then a session cookie |
+| Routes | dashboard pages, `/api/*`, `/events`, `/import`, `/logs`, `/auth/*` | the playback/voice API + `/events`, and for a signed-in browser the dashboard page (no import, no logs) |
 | Tunnel origin? | **yes, the only one** | **never** |
 
 The two listeners share the sound queue and library but no authentication code or state. The old `ACCESS_KEY` /
@@ -213,6 +213,32 @@ Typical use: `!access whitelist on`, then `!access allow server here` in each se
 The settings live in `access.json` (`ACCESS_FILE` to move it). You can edit it by hand while the bot runs (a broken edit is reported and the
 previous rules stay in force; a broken file at startup stops the bot instead of guessing). Changes made by `!access` or by hand apply
 immediately to commands and to dashboard requests. A user who loses `dashboard` or is blocked is signed out on their next request.
+
+### Local (private) dashboard in a browser on your network
+
+Open `http://<this PC's 192.168.x.x address>:3940/` and type the local access key into the sign-in page. The key goes in a form
+POST, never in the URL; the server then gives your browser its own session cookie. A `?key=...` in the address bar does nothing.
+You get the playback dashboard only (no Import, no Logs: those exist only on the Discord-protected public dashboard). Tools and
+scripts keep using the `X-Access-Key` header. `LOCAL_DASHBOARD=0` turns the browser part off.
+
+To reach it from other devices set, in `.env`:
+
+    LOCAL_HOST=192.168.1.20          (this PC's own LAN address: run ipconfig, look for "IPv4 Address")
+    LOCAL_ACCESS_KEY=<long random value>
+
+**Use the PC's 192.168.x.x address, not 0.0.0.0.** `0.0.0.0` does not mean "local network only": it means *every* network interface
+the PC has (Wi-Fi, Ethernet, VPN adapters, anything a tunnel or hotspot adds). Binding to the 192.168 address gives exactly "LAN only".
+Give the PC a fixed address (router DHCP reservation) so it does not change. If you still want all interfaces, startup refuses unless you add
+`LOCAL_ALLOW_ALL_INTERFACES=1`, and then the firewall rule below is what keeps it LAN-only.
+
+This is plain http: on a LAN, anyone who can sniff the network could read the key. Use it on a home network you trust, never over the
+internet and never through the tunnel. Wrong keys are rate-limited (8 per 10 minutes per address), and only Host names that look like
+a private network (IP address, PC name, `.local`/`.lan`) are answered.
+
+Firewall rule that allows the local subnet only (run as Administrator; no rule is needed for loopback-only use):
+
+    New-NetFirewallRule -DisplayName "Aboda local 3940 (LAN only)" -Direction Inbound -Action Allow -Protocol TCP `
+      -LocalPort 3940 -RemoteAddress LocalSubnet -Profile Private
 
 ### Local integration API
 

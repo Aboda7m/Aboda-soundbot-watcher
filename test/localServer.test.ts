@@ -54,13 +54,25 @@ test("local: the key is never echoed back", async () => {
   for (const [, v] of r.headers) assert.ok(!v.includes(KEY));
 });
 
-test("local: serves only the playback/voice API (no pages, import, logs, or login routes)", async () => {
-  for (const path of ["/", "/index.html", "/app.js", "/style.css", "/import", "/import.js", "/logs", "/logs.js", "/api/import/config", "/api/logs?type=sound", "/auth/login", "/auth/callback", "/auth/logout", "/api/import/preview/00000000-0000-0000-0000-000000000000"]) {
-    assert.equal((await get(path, K)).status, 404, path);
+test("local: only the playback/voice API and the sign-in/dashboard pages exist (no import, logs, or Discord login)", async () => {
+  for (const path of ["/index.html", "/app.js", "/style.css", "/import", "/import.js", "/logs", "/logs.js", "/api/import/config", "/api/logs?type=sound", "/auth/login", "/auth/callback", "/auth/logout", "/api/me", "/api/import/preview/00000000-0000-0000-0000-000000000000"]) {
+    assert.equal((await get(path, K)).status, 404, `${path} (a key header alone does not unlock pages)`);
   }
-  for (const path of ["/api/import/upload", "/api/import/save", "/api/import/youtube", "/auth/logout"]) {
+  for (const path of ["/api/import/upload", "/api/import/save", "/api/import/youtube"]) {
     assert.equal((await jsonPost(`${l.base}${path}`, {}, K)).status, 404, path);
   }
+});
+
+test("local: with the dashboard off it is a pure header-only API with no pages at all", async () => {
+  const h = await startLocal(KEY, [], { dashboard: false });
+  try {
+    for (const path of ["/", "/app.js", "/login.css", "/auth/key-login"]) {
+      assert.equal((await fetch(h.base + path, { headers: K })).status, 404, path);
+      assert.equal((await fetch(h.base + path)).status, 401, `${path} without a key`);
+    }
+    assert.equal((await fetch(`${h.base}/api/sounds`, { headers: K })).status, 200);
+    assert.equal((await fetch(`${h.base}/auth/key-login`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `key=${KEY}` })).status, 401);
+  } finally { h.close(); }
 });
 
 test("local: input validation, content type, origin and method rules are unchanged", async () => {

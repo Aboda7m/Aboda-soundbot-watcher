@@ -49,8 +49,14 @@ test("config: the local listener stays off without a key, and can be switched of
 test("config: same port, or a wildcard local bind, refuse to start", () => {
   assert.match(checkNetworkConfig(loadConfig({ ...full, LOCAL_PORT: "3939" })).errors.join(), /different ports/);
   for (const host of ["0.0.0.0", "::", "[::]"]) {
-    assert.match(checkNetworkConfig(loadConfig({ ...full, LOCAL_HOST: host })).errors.join(), /not 0\.0\.0\.0/, host);
+    assert.match(checkNetworkConfig(loadConfig({ ...full, LOCAL_HOST: host })).errors.join(), /EVERY network interface/, host);
   }
+  // ...unless that is explicitly asked for, in which case it starts with a loud warning
+  const all = checkNetworkConfig(loadConfig({ ...full, LOCAL_HOST: "0.0.0.0", LOCAL_ALLOW_ALL_INTERFACES: "1" }));
+  assert.deepEqual(all.errors, []);
+  assert.match(all.warnings.join("\n"), /ALL interfaces/);
+  assert.equal(loadConfig(full).localDashboard, true);
+  assert.equal(loadConfig({ ...full, LOCAL_DASHBOARD: "0" }).localDashboard, false);
   // not an error when the listener is off
   assert.deepEqual(checkNetworkConfig(loadConfig({ ...full, LOCAL_ENABLED: "0", LOCAL_HOST: "0.0.0.0" })).errors, []);
 });

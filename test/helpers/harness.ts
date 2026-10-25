@@ -94,10 +94,16 @@ export async function startPublic(over: Partial<PublicDeps> = {}): Promise<Publi
   return { base: origin, origin, server, sessions, now, enqueued, sse, signIn, close: () => { server.close(); server.closeAllConnections(); sessions.close(); } };
 }
 
-export async function startLocal(accessKey: string, enqueued: PlayRequest[] = []) {
-  const server = createLocalServer({ ...coreDeps(enqueued), host: "127.0.0.1", accessKey });
+export async function startLocal(accessKey: string, enqueued: PlayRequest[] = [], opts: { dashboard?: boolean; host?: string } = {}) {
+  const sessions = new SessionStore({ maxAgeMs: 60_000, sweepMs: 3_600_000 });
+  const server = createLocalServer({
+    ...coreDeps(enqueued),
+    host: opts.host ?? "127.0.0.1",
+    accessKey,
+    dashboard: opts.dashboard === false ? undefined : { sessions },
+  });
   const port = await listen(server);
-  return { base: `http://127.0.0.1:${port}`, server, enqueued, close: () => { server.close(); server.closeAllConnections(); } };
+  return { base: `http://127.0.0.1:${port}`, server, enqueued, sessions, close: () => { server.close(); server.closeAllConnections(); sessions.close(); } };
 }
 
 export const jsonPost = (url: string, body: unknown, headers: Record<string, string> = {}) =>

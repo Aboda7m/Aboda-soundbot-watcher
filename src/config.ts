@@ -24,6 +24,10 @@ export interface Config {
   localEnabled: boolean;
   localPort: number;
   localHost: string;
+  /** Browser sign-in + dashboard on the local listener (header-only API when off). */
+  localDashboard: boolean;
+  /** Explicit opt-in to bind 0.0.0.0 / :: (every network interface). A specific LAN address is the better choice. */
+  localAllowAllInterfaces: boolean;
   localAccessKey: string;
   /** true when the key came from the legacy ACCESS_KEY variable */
   localKeyIsLegacy: boolean;
@@ -97,6 +101,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     localEnabled: flag(env.LOCAL_ENABLED, true) && localKey !== "",
     localPort: num(env.LOCAL_PORT, 3940),
     localHost: env.LOCAL_HOST?.trim() || "127.0.0.1",
+    localDashboard: flag(env.LOCAL_DASHBOARD, true),
+    localAllowAllInterfaces: flag(env.LOCAL_ALLOW_ALL_INTERFACES, false),
     localAccessKey: localKey,
     localKeyIsLegacy: !env.LOCAL_ACCESS_KEY?.trim() && !!env.ACCESS_KEY?.trim(),
     hideBots: flag(env.HIDE_BOTS, false),
@@ -181,8 +187,10 @@ export function checkNetworkConfig(c: Config): NetworkCheck {
 
   if (c.localEnabled) {
     if (c.localPort === c.publicPort) errors.push(`LOCAL_PORT and PORT are both ${c.publicPort}: the two listeners need different ports.`);
-    if (WILDCARD.has(c.localHost)) {
-      errors.push("LOCAL_HOST must be 127.0.0.1 or one specific LAN address of this PC, not 0.0.0.0 / :: (a wildcard bind listens on every interface).");
+    if (WILDCARD.has(c.localHost) && !c.localAllowAllInterfaces) {
+      errors.push("LOCAL_HOST=0.0.0.0 / :: listens on EVERY network interface, not just your LAN. Use this PC's 192.168.x.x address instead, or add LOCAL_ALLOW_ALL_INTERFACES=1 if you really want all interfaces (and restrict it with the firewall rule in the README).");
+    } else if (WILDCARD.has(c.localHost)) {
+      warnings.push(`The local listener is bound to ALL interfaces (${c.localHost}:${c.localPort}). It is only as private as your firewall: allow port ${c.localPort} for the local subnet only (README), never through the router, and never in the tunnel.`);
     } else if (!isLoopbackHost(c.localHost)) {
       warnings.push(`The local listener is bound to ${c.localHost}:${c.localPort}, so other devices on that network can reach it. Restrict it with the Windows Firewall rule in the README; the access key alone is not a network boundary.`);
     }

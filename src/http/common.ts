@@ -56,3 +56,17 @@ export function contentTypeAllowed(req: IncomingMessage, res: ServerResponse, co
 
 export const isLoopbackHost = (host: string): boolean =>
   ["127.0.0.1", "localhost", "::1", "[::1]"].includes(host) || /^127\.\d+\.\d+\.\d+$/.test(host);
+
+/**
+ * Host header acceptable for a listener on a private network address: an IP literal, a single-label name
+ * (a PC name) or a typical private suffix. A public-looking name such as evil.example is refused, which stops
+ * a web page from reaching the listener by re-pointing its own DNS name at your LAN address.
+ */
+export function isPrivateNetworkHost(hostHeader: string | undefined): boolean {
+  const raw = (hostHeader ?? "").toLowerCase();
+  const h = raw.startsWith("[") ? raw.replace(/\]:\d+$/, "]") : raw.replace(/:\d+$/, "");
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true;
+  if (/^\[[0-9a-f:.]+\]$/.test(h)) return true;
+  if (!h.includes(".")) return /^[a-z0-9-]+$/.test(h);
+  return /^[a-z0-9.-]+\.(local|lan|home\.arpa|internal)$/.test(h);
+}
