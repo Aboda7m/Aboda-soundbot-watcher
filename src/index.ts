@@ -160,7 +160,7 @@ const core = {
 };
 
 // ---- PUBLIC listener: Discord OAuth2 + server-side sessions (the Cloudflare Tunnel origin) ----
-const sessions = new SessionStore({ maxAgeMs: config.sessionMaxMs });
+const sessions = new SessionStore({ maxAgeMs: config.sessionMaxMs, file: config.sessionFile, log: logError });
 const authorizer = createAuthorizer({
   userIds: [...config.ownerUserIds, ...config.dashboardUserIds], // owners, plus legacy dashboard-only ids (they are not owners)
   extraAllow: (id) => access.can(id, "dashboard"), // users the owner granted `dashboard` to
@@ -197,7 +197,14 @@ const publicServer = createPublicServer({
       })
     : undefined,
   authorize: authorizer,
-  can: (userId: string, capability: Capability) => access.can(userId, capability),
+  // The server-side check made on every request. A member admitted by the DASHBOARD_GUILD_ID / DASHBOARD_ROLE_IDS rule has no
+  // `dashboard` grant, but holds a live session that the periodic recheck keeps honest; a blocked user never passes.
+  can: (userId: string, capability: Capability) =>
+    access.can(userId, capability) ||
+    (capability === "dashboard" &&
+      !!config.dashboardGuildId &&
+      !access.isBlocked(userId) &&
+      sessions.all().some((s) => s.user.id === userId)),
   recheck: authorizer.recheck,
   recheckMs: config.sessionRecheckMs,
   importer,
@@ -209,7 +216,7 @@ const publicServer = createPublicServer({
 });
 
 // ---- LOCAL listener: access key in a header, playback/voice API only ----
-const localSessions = new SessionStore({ maxAgeMs: config.sessionMaxMs });
+const localSessions = new SessionStore({ maxAgeMs: config.localSessionMaxMs }); // memory only, never as long-lived as the Discord one
 const localServer = config.localEnabled
   ? createLocalServer({
       ...core,

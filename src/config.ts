@@ -20,7 +20,12 @@ export interface Config {
   dashboardUserIds: string[];
   dashboardGuildId: string;
   dashboardRoleIds: string[];
+  /** Absolute lifetime of a public dashboard sign-in (and of its cookie). Default 30 days. */
   sessionMaxMs: number;
+  /** Where public dashboard sessions are kept so they survive restarts (only hashes of the session ids are stored). */
+  sessionFile: string;
+  /** Lifetime of a sign-in on the local (access-key) dashboard; always memory-only. Independent of the public one. */
+  localSessionMaxMs: number;
   /** How often live sessions are re-authorized (0 = never). Only matters for guild/role rules. */
   sessionRecheckMs: number;
   /** LOCAL integration listener. Authenticates with an access key in a header only. */
@@ -99,7 +104,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dashboardUserIds: list(env.DASHBOARD_ALLOWED_USER_IDS),
     dashboardGuildId: (env.DASHBOARD_GUILD_ID ?? "").trim(),
     dashboardRoleIds: list(env.DASHBOARD_ROLE_IDS),
-    sessionMaxMs: Math.max(1, num(env.SESSION_MAX_HOURS, 12)) * 3_600_000,
+    sessionMaxMs: Math.max(1, num(env.SESSION_MAX_HOURS, 720)) * 3_600_000,
+    sessionFile: resolve(env.SESSION_FILE ?? "./sessions.json"),
+    localSessionMaxMs: Math.max(1, num(env.LOCAL_SESSION_MAX_HOURS, 12)) * 3_600_000,
     sessionRecheckMs: num(env.SESSION_RECHECK_MINUTES, 10) * 60_000,
     localEnabled: flag(env.LOCAL_ENABLED, true) && localKey !== "",
     localPort: num(env.LOCAL_PORT, 3940),

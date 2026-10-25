@@ -18,3 +18,13 @@ test("the access file defaults to ./access.json and ACCESS_FILE moves it", () =>
   assert.match(loadConfig({}).accessFile, /access\.json$/);
   assert.match(loadConfig({ ACCESS_FILE: "./data/acl.json" }).accessFile, /acl\.json$/);
 });
+
+test("sessions: 30 days by default, SESSION_MAX_HOURS still overrides, the local dashboard has its own shorter lifetime", () => {
+  const d = loadConfig({});
+  assert.equal(d.sessionMaxMs, 30 * 24 * 3_600_000);
+  assert.equal(d.localSessionMaxMs, 12 * 3_600_000);
+  assert.match(d.sessionFile, /sessions\.json$/);
+  assert.equal(loadConfig({ SESSION_MAX_HOURS: "12" }).sessionMaxMs, 12 * 3_600_000);
+  assert.equal(loadConfig({ SESSION_MAX_HOURS: "12" }).localSessionMaxMs, 12 * 3_600_000);
+  assert.equal(loadConfig({ SESSION_MAX_HOURS: "720", LOCAL_SESSION_MAX_HOURS: "2" }).localSessionMaxMs, 2 * 3_600_000);
+});

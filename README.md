@@ -124,7 +124,9 @@ section. The client id equals the bot's id: it is in the `Invite:` link the bot 
 | `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` | **required** | see above |
 | `OWNER_USER_IDS`, `DASHBOARD_ALLOWED_USER_IDS` and/or `DASHBOARD_GUILD_ID` | **at least one required** (or `!access grant <user> dashboard`) | who may sign in; with none, **nobody** can (fail closed). `DASHBOARD_ALLOWED_USER_IDS` users get the dashboard only, they are not owners |
 | `DASHBOARD_ROLE_IDS` | optional | with `DASHBOARD_GUILD_ID`: only members holding one of these roles |
-| `SESSION_MAX_HOURS` | optional, 12 | absolute session lifetime |
+| `SESSION_MAX_HOURS` | optional, 720 (30 days) | absolute lifetime of a Discord sign-in and of its cookie; it is not extended by use |
+| `SESSION_FILE` | optional, `./sessions.json` | where sign-ins are kept so they survive a bot restart (hashes only). Keep it private and out of git |
+| `LOCAL_SESSION_MAX_HOURS` | optional, 12 | lifetime of an access-key sign-in on the local dashboard (memory only) |
 | `SESSION_RECHECK_MINUTES` | optional, 10 | how often live sessions are re-authorized (0 = off) |
 | `PUBLIC_HOST` | optional, `127.0.0.1` | bind address of the tunnel origin. Leave it alone |
 | `PORT` | optional, 3939 | port of the tunnel origin |
@@ -162,15 +164,17 @@ Check: `findstr /b "HOST PUBLIC_HOST" .env` and `echo %HOST%`; the `Public dashb
 **How the login works.** Scope `identify` only, authorization-code flow with PKCE (S256; Discord lists it in its published OAuth metadata
 at `https://discord.com/.well-known/oauth-authorization-server`) and a `state`. The state is single-use, expires after 10 minutes, and is
 also bound to the browser that started the login by a short-lived cookie, so a login link made by someone else is rejected. The access
-token is used once to read your user id and is then revoked. The session id is random, kept only in server memory (**a bot restart signs
-everybody out**), and sent as an `HttpOnly; SameSite=Lax` cookie (`__Host-` prefixed and `Secure` when `PUBLIC_BASE_URL` is https). It
-expires `SESSION_MAX_HOURS` after sign-in no matter what. Writes need a JSON (or upload) content type **and** an `Origin` header that is
+token is used once to read your user id and is then revoked. The session id is random and kept server-side in `SESSION_FILE` as a SHA-256 hash (the id in your browser is never written to disk), so
+**closing the browser or restarting the bot does not sign you out**. It is sent as a persistent `HttpOnly; SameSite=Lax; Max-Age` cookie
+(`__Host-` prefixed and `Secure` when `PUBLIC_BASE_URL` is https). It expires `SESSION_MAX_HOURS` (30 days) after sign-in no matter what,
+and logging out, losing the `dashboard` permission, being blocked, or failing the periodic recheck ends it immediately. There is no session
+signing secret to keep: the cookie is an unguessable random id, not a signed value. Writes need a JSON (or upload) content type **and** an `Origin` header that is
 exactly your site. `POST /auth/logout`, expiry or revocation also close that session's live event streams.
 
 **Changes after sign-in.** Every `SESSION_RECHECK_MINUTES` the server re-checks each live session against the current rules. Losing
 the role or leaving the server ends the session (and its stream) within that interval. If Discord cannot be reached the check is
-inconclusive and sessions are kept until they expire. Removing a user id from `DASHBOARD_ALLOWED_USER_IDS` needs a bot restart (which
-ends all sessions anyway).
+inconclusive and sessions are kept until they expire. Removing a user id from `DASHBOARD_ALLOWED_USER_IDS` needs a bot restart; that user's saved
+session is refused on their next request after it.
 
 ### Access control: who may use the bot and who may do what
 

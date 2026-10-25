@@ -42,3 +42,8 @@ sound-play-logs.json
 # Access policy (whitelist/blacklist/permissions: Discord user and server ids; created by !access) and its temp file
 access.json
 access.json.tmp
+
+
+#sessions
+
+sessions.json

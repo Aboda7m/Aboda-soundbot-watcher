@@ -13,7 +13,7 @@ import type { SoundRepository } from "../sound/SoundRepository.ts";
 
 /** The small slice of a discord.js Message the simple handlers use. */
 export interface CommandMessage {
-  author: { id: string; send(content: string): Promise<unknown> };
+  author: { id: string; tag?: string; username?: string; send(content: string): Promise<unknown> };
   member?: {
     permissions: {
       has(permission: bigint): boolean;

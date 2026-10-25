@@ -15,7 +15,7 @@ export interface CoreDeps {
   repo: SoundRepository;
   queue: SoundQueue;
   /** true if the guild/channel exists and is a voice channel the bot can see */
-  canTarget(guildId: string, channelId: string): boolean;
+  canTarget(guildId: string, channelId: string, userId?: string): boolean;
 }
 
 export interface CoreKit {
@@ -23,11 +23,8 @@ export interface CoreKit {
   guard(req: IncomingMessage, res: ServerResponse, contentType?: string): boolean;
   /** Called with every SSE response, so the listener can end it when the caller's authorization ends. */
   onStream?(res: ServerResponse): void;
-  /**
-   * The person this request was authenticated as, when the listener has verified one (the public listener
-   * passes the signed-in Discord user). Used only to attribute the sound in the play log; left out = unknown.
-   */
-  user?: { id: string; username?: string | null };
+  /** The authenticated person behind this request, when the listener knows one (public dashboard: the Discord account). */
+  user?: { id: string; username: string };
 }
 
 /** Returns true if the request was one of ours (and has been answered). */
@@ -113,15 +110,14 @@ async function play(d: CoreDeps, req: IncomingMessage, res: ServerResponse, kit:
     return json(res, 400, { error: "guildId/channelId are not valid ids" });
   }
   if (!d.library.has(sound)) return json(res, 404, { error: "Unknown sound" });
-  if (!d.canTarget(guildId, channelId)) return json(res, 404, { error: "Unknown guild or voice channel" });
+  if (!d.canTarget(guildId, channelId, kit.user?.id)) return json(res, 404, { error: "Unknown guild or voice channel" });
 
   const result = d.queue.enqueue({
     sound,
     guildId,
     channelId,
     source: "manual",
-    trigger: "web",
-    requestedBy: kit.user ? { userId: kit.user.id, username: kit.user.username ?? null } : null,
+    requestedBy: kit.user ? { userId: kit.user.id, username: kit.user.username } : null,
   });
   if (result.ok) return json(res, 202, { ok: true, position: result.position });
 
