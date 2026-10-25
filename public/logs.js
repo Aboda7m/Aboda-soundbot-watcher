@@ -50,7 +50,16 @@ function renderTime(td, e) {
 }
 
 function renderUser(td, e) {
-  setText(td, e.username || e.userId);
+  const who = e.username || e.userId;
+  if (!who && typeof e.trigger === "string") {
+    // A sound-play entry with no attributed user: say why, instead of a bare dash.
+    const auto = e.trigger.startsWith("auto-");
+    td.textContent = auto ? "Automatic" : NONE;
+    td.classList.add("none");
+    td.title = auto ? "Played automatically; no user is attributed to this sound" : "No requester was recorded for this entry";
+    return;
+  }
+  setText(td, who);
   if (e.username && e.userId) td.title = `User ID ${e.userId}`;
 }
 

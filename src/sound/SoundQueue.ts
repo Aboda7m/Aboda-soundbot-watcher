@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { VoicePort } from "../voice/VoicePort.ts";
-import { logSoundPlay } from "../watcher/SoundPlayLogger.ts";
+import { logSoundPlay, type SoundPlayTrigger } from "../watcher/SoundPlayLogger.ts";
 
 export type PlaySource = "entrance" | "exit" | "manual";
 
@@ -9,6 +9,8 @@ export interface PlayRequest {
   guildId: string;
   channelId: string;
   source: PlaySource;
+  /** How the request arrived, for the play log. Left out = derived from `source`. */
+  trigger?: SoundPlayTrigger;
   requestedBy?: { userId: string; username?: string | null } | null;
 }
 
@@ -227,23 +229,7 @@ export class SoundQueue {
 
           await this.#d.voice.play(guildId, req.channelId, path);
           this.#d.onPlayed?.(req.sound);
-
-          // Log successfully played sound
-          const trigger =
-            req.source === "manual"
-              ? "text-command"
-              : req.source === "entrance"
-                ? "auto-entrance"
-                : "auto-exit";
-
-          logSoundPlay({
-            sound: req.sound,
-            guildId: req.guildId,
-            channelId: req.channelId,
-            source: req.source,
-            trigger,
-            requestedBy: req.requestedBy ?? null,
-          });
+          this.#recordPlay(req);
         } catch (err) {
           this.#d.log?.(
             `Could not play "${req.sound}" in guild ${guildId}`,
@@ -260,6 +246,36 @@ export class SoundQueue {
       if (!this.#closed) {
         this.#scheduleLeave(guildId, g);
       }
+    }
+  }
+
+  /**
+   * Called once per sound, only after `voice.play` resolved. A problem writing the log is reported
+   * as such: it must not be mistaken for (or interrupt) playback.
+   */
+  #recordPlay(req: QueueItem): void {
+    const trigger: SoundPlayTrigger =
+      req.trigger ??
+      (req.source === "manual"
+        ? "text-command"
+        : req.source === "entrance"
+          ? "auto-entrance"
+          : "auto-exit");
+
+    try {
+      logSoundPlay({
+        sound: req.sound,
+        guildId: req.guildId,
+        channelId: req.channelId,
+        source: req.source,
+        trigger,
+        requestedBy: req.requestedBy ?? null,
+      });
+    } catch (err) {
+      this.#d.log?.(
+        `Played "${req.sound}" in guild ${req.guildId} but could not write the play log`,
+        err,
+      );
     }
   }
 

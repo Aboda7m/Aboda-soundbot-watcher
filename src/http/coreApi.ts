@@ -23,6 +23,11 @@ export interface CoreKit {
   guard(req: IncomingMessage, res: ServerResponse, contentType?: string): boolean;
   /** Called with every SSE response, so the listener can end it when the caller's authorization ends. */
   onStream?(res: ServerResponse): void;
+  /**
+   * The person this request was authenticated as, when the listener has verified one (the public listener
+   * passes the signed-in Discord user). Used only to attribute the sound in the play log; left out = unknown.
+   */
+  user?: { id: string; username?: string | null };
 }
 
 /** Returns true if the request was one of ours (and has been answered). */
@@ -110,7 +115,14 @@ async function play(d: CoreDeps, req: IncomingMessage, res: ServerResponse, kit:
   if (!d.library.has(sound)) return json(res, 404, { error: "Unknown sound" });
   if (!d.canTarget(guildId, channelId)) return json(res, 404, { error: "Unknown guild or voice channel" });
 
-  const result = d.queue.enqueue({ sound, guildId, channelId, source: "manual" });
+  const result = d.queue.enqueue({
+    sound,
+    guildId,
+    channelId,
+    source: "manual",
+    trigger: "web",
+    requestedBy: kit.user ? { userId: kit.user.id, username: kit.user.username ?? null } : null,
+  });
   if (result.ok) return json(res, 202, { ok: true, position: result.position });
 
   const status = result.reason === "queue-full" ? 429 : result.reason === "duplicate" ? 409 : 503;

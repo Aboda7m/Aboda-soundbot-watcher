@@ -4,7 +4,7 @@ import path from "node:path";
 const LOG_FILE_PATH = path.join(process.cwd(), "sound-play-logs.json");
 
 export type SoundPlaySource = "manual" | "entrance" | "exit";
-export type SoundPlayTrigger = "text-command" | "auto-entrance" | "auto-exit";
+export type SoundPlayTrigger = "text-command" | "web" | "auto-entrance" | "auto-exit";
 
 export interface SoundPlayLogRecord {
   timestamp: string;
@@ -26,6 +26,28 @@ export interface SoundPlayLogRequest {
   requestedBy?: { userId: string; username?: string | null } | null;
 }
 
+/**
+ * Reads the existing log. A read error (permissions, a directory in the way, ...) propagates, so a file
+ * that could not be read is never overwritten. A file that was read but is not a JSON array (damaged or
+ * half-written) is moved aside for recovery instead of being replaced.
+ */
+function readExisting(): SoundPlayLogRecord[] {
+  if (!fs.existsSync(LOG_FILE_PATH)) return [];
+
+  const text = fs.readFileSync(LOG_FILE_PATH, "utf-8");
+  if (!text.trim()) return [];
+
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed as SoundPlayLogRecord[];
+  } catch {
+    // Handled below.
+  }
+
+  fs.renameSync(LOG_FILE_PATH, LOG_FILE_PATH.replace(/\.json$/, `.corrupt-${Date.now()}.json`));
+  return [];
+}
+
 export function logSoundPlay(req: SoundPlayLogRequest): void {
   const record: SoundPlayLogRecord = {
     timestamp: new Date().toISOString(),
@@ -38,18 +60,17 @@ export function logSoundPlay(req: SoundPlayLogRequest): void {
     username: req.requestedBy?.username ?? null,
   };
 
-  let logs: SoundPlayLogRecord[] = [];
-
-  if (fs.existsSync(LOG_FILE_PATH)) {
-    try {
-      const fileContent = fs.readFileSync(LOG_FILE_PATH, "utf-8");
-      const parsed = JSON.parse(fileContent);
-      logs = Array.isArray(parsed) ? (parsed as SoundPlayLogRecord[]) : [];
-    } catch {
-      logs = [];
-    }
-  }
-
+  const logs = readExisting();
   logs.push(record);
-  fs.writeFileSync(LOG_FILE_PATH, JSON.stringify(logs, null, 2), "utf-8");
+
+  // Write to a temporary file and rename it over the log, so the dashboard (which polls this file)
+  // never reads a half-written one.
+  const tmp = `${LOG_FILE_PATH}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(logs, null, 2), "utf-8");
+    fs.renameSync(tmp, LOG_FILE_PATH);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
 }

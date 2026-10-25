@@ -311,6 +311,8 @@ export function createPublicServer(d: PublicDeps): Server {
 
       const core = {
         guard,
+        // The identity Discord OAuth verified for this session, so plays started here are attributed to them.
+        user: { id: uid, username: session.user.username },
         onStream: (stream: ServerResponse) => {
           const detach = d.sessions.attach(session.id, () => stream.end());
           stream.on("close", detach);
