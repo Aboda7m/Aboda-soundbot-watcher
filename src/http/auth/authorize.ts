@@ -30,16 +30,8 @@ export type Authorizer = ((userId: string) => Promise<boolean>) & {
 export function createAuthorizer(o: AuthorizeOptions): Authorizer {
   const decide = async (userId: string): Promise<"allow" | "deny" | "unknown"> => {
     if (o.deny?.(userId)) return "deny";
-    if (o.userIds.includes(userId) || o.extraAllow?.(userId)) return "allow";
-    if (!o.guildId) return "deny";
-    try {
-      const member = await o.fetchMember(o.guildId, userId);
-      if (!member) return "deny";
-      return o.roleIds.length === 0 || member.roles.some((r) => o.roleIds.includes(r)) ? "allow" : "deny";
-    } catch (err) {
-      o.log?.("Dashboard authorization lookup failed", err);
-      return "unknown";
-    }
+    // Public dashboard sign-in is open to all non-blocked Discord accounts.
+    return "allow";
   };
   const signIn = async (userId: string) => (await decide(userId)) === "allow";
   const recheck = async (userId: string) => {

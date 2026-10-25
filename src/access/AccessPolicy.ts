@@ -187,7 +187,9 @@ export class AccessPolicy {
     this.#refresh();
     if (this.isOwner(userId)) return true;
     if (this.isBlocked(userId)) return false;
-    if (capability === "dashboard" && this.#dashboardUsers.has(userId)) return true;
+    // The normal dashboard is open to every non-blocked user.
+    // Other capabilities still require explicit grants.
+    if (capability === "dashboard") return true;
     return this.#data.grants[userId]?.includes(capability) ?? false;
   }
 
