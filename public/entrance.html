@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>My entrance sound</title>
+  <link rel="stylesheet" href="/entrance.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <h1>My entrance sound</h1>
+    <a class="back" href="/">Back to soundboard</a>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <p id="banner" class="banner" role="alert" hidden></p>
+
+    <section class="card" aria-labelledby="current-title">
+      <h2 id="current-title">Your entrance sound</h2>
+      <p id="who" class="hint"></p>
+      <p id="current-text" class="current-text" role="status">Loading…</p>
+      <div class="actions">
+        <button type="button" class="btn" id="current-play" hidden>Preview</button>
+        <button type="button" class="btn" id="clear" hidden>Clear</button>
+      </div>
+    </section>
+
+    <section aria-labelledby="pick-title">
+      <h2 id="pick-title">Choose a sound</h2>
+      <label class="field" for="search">
+        <span class="visually-hidden">Search sounds</span>
+        <input id="search" type="search" placeholder="Search sounds" autocomplete="off" spellcheck="false" disabled>
+      </label>
+      <p id="results" class="hint" role="status"></p>
+      <ul id="list" class="list"></ul>
+    </section>
+  </main>
+
+  <script src="/entrance.js" defer></script>
+</body>
+</html>

@@ -8,6 +8,7 @@ import type { ImportService } from "../import/ImportService.ts";
 import { handleImportRoute } from "./importRoutes.ts";
 import { handleLogRoute, type LogFiles } from "./logRoutes.ts";
 import { handleCoreApi, type CoreDeps } from "./coreApi.ts";
+import { handleEntranceRoute } from "./entranceRoutes.ts";
 import { SECURITY_HEADERS, contentTypeAllowed, json, readBody, safeEqual } from "./common.ts";
 import { parseCookies, serializeCookie } from "./auth/cookies.ts";
 import type { DiscordOAuth } from "./auth/discordOAuth.ts";
@@ -52,6 +53,14 @@ const STATIC: Record<string, StaticEntry> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
+  // "My entrance sound": any signed-in dashboard user. The page plays previews from blob: URLs, hence media-src.
+  "/entrance": {
+    file: "entrance.html",
+    type: "text/html; charset=utf-8",
+    csp: "default-src 'none'; script-src 'self'; style-src 'self'; media-src blob:; connect-src 'self'",
+  },
+  "/entrance.js": { file: "entrance.js", type: "text/javascript; charset=utf-8" },
+  "/entrance.css": { file: "entrance.css", type: "text/css; charset=utf-8" },
 };
 
 // Served only when an importer is configured. The page plays its own preview audio, hence media-src.
@@ -81,7 +90,7 @@ const PUBLIC_ASSETS: Record<string, StaticEntry> = {
   "/login.css": { file: "login.css", type: "text/css; charset=utf-8" },
 };
 
-const PAGES = new Set(["/", "/import", "/logs"]);
+const PAGES = new Set(["/", "/entrance", "/import", "/logs"]);
 
 /** Which owner-granted permission a route needs, beyond being allowed onto the dashboard at all. */
 function requiredCapability(path: string): Capability | null {
@@ -331,6 +340,9 @@ export function createPublicServer(d: PublicDeps): Server {
       if (d.logs && (await handleLogRoute(d.logs, req, res, url, { json }))) return;
 
       if (await handleCoreApi(d, req, res, url, core)) return;
+
+      // The entrance sound always belongs to the signed-in account of this session; no request can name another user.
+      if (await handleEntranceRoute(d, req, res, url, core)) return;
 
       if (isPost) return json(res, 404, { error: "Not found" });
 

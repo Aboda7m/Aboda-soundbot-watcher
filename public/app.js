@@ -1518,6 +1518,9 @@ fetch("/api/me", { cache: "no-store" })
   .then((r) => (r.ok ? r.json() : null))
   .then((me) => {
     if (!me) return;
+    // The entrance page needs a real Discord identity; the local key-based dashboard has none ("local-key").
+    const entrance = document.getElementById("entranceButton");
+    if (entrance && /^\d{15,25}$/.test(me.user?.id ?? "")) entrance.hidden = false;
     for (const [id, allowed] of [["importSoundsButton", me.can?.import], ["logsButton", me.can?.logs]]) {
       const el = document.getElementById(id);
       if (el && allowed === false) el.hidden = true;
