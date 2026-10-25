@@ -21,12 +21,9 @@ const SOUND_TABS = new Set(["sounds", "favorites", "recent"]);
 const MAX_RECENT = 30;
 const TAG_LIMIT = 12;
 
-// Authentication is the Discord sign-in session cookie, sent by the browser itself. No key is ever put in the page,
-// the URL or a header. (Old bookmarks with ?key=... are cleaned up so the value does not linger in the address bar.)
+// Authentication is the session cookie, sent by the browser itself. No key is put in the page or a header.
+// A ?key=... in the address bar is deliberately left alone, so a refresh or a webview reload still has it.
 const authHeaders = {};
-if (new URLSearchParams(location.search).has("key")) {
-  history.replaceState(null, "", location.pathname + location.hash);
-}
 
 /* ---------- localStorage (falls back to memory if unavailable) ---------- */
 

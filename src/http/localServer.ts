@@ -259,29 +259,32 @@ export function createLocalServer(d: LocalDeps): Server {
 
       const viaKey = keyOk(req, url);
 
-      // Exchange a valid URL key for a session, then remove the key from
-      // the browser address bar before loading the dashboard.
+      // Exchange a valid URL key for a session and serve the dashboard from
+      // the SAME URL (no redirect), so ?key=... stays in the address bar and
+      // a refresh, bookmark or webview reload keeps working.
       if (
         sessions &&
         isGet &&
         url.pathname === "/" &&
         url.searchParams.has("key") &&
-        viaKey
+        safeEqual(url.searchParams.get("key") ?? "", d.accessKey)
       ) {
-        const s = sessions.create({
+        const s = session ?? sessions.create({
           id: "local-key",
           username: "Local access key",
         });
 
         return void res
-          .writeHead(302, {
+          .writeHead(200, {
             ...SECURITY_HEADERS,
-            Location: "/",
+            "Content-Type": STATIC["/"]!.type,
             "Cache-Control": "no-store",
             "Referrer-Policy": "no-referrer",
-            "Set-Cookie": cookie(s.id, sessions.maxAgeMs / 1000),
+            ...(session
+              ? {}
+              : { "Set-Cookie": cookie(s.id, sessions.maxAgeMs / 1000) }),
           })
-          .end();
+          .end(await readFile(join(PUBLIC_DIR, STATIC["/"]!.file)));
       }
 
       if (!viaKey && !session) {
