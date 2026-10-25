@@ -76,11 +76,172 @@ Nothing is moved or deleted. Point `SOUNDS_DIR` and `DB_PATH` at the legacy `sou
 Before the first write a copy is saved as `db.json.bak`. A malformed db.json stops startup and is left untouched.
 Do not run the legacy bot and this one against the same db.json at the same time.
 
-## API (loopback by default)
+## Network layout: two listeners
 
-    GET  /api/voice    current voice snapshot        GET /events   live stream (SSE)
+| | Public dashboard | Local integration API |
+|---|---|---|
+| Default address | `127.0.0.1:3939` (`PUBLIC_HOST`, `PORT`) | `127.0.0.1:3940` (`LOCAL_HOST`, `LOCAL_PORT`) |
+| Meant for | browsers, through the Cloudflare Tunnel | scripts, dev tools, the Nexus panel on this PC / LAN |
+| Authentication | **Discord OAuth2** + server-side session cookie. Nothing else. | `X-Access-Key` **header** on every request |
+| Routes | dashboard pages, `/api/*`, `/events`, `/import`, `/logs`, `/auth/*` | only `/api/voice`, `/api/sounds`, `/api/status`, `/api/play`, `/api/queue/*`, `/events` |
+| Tunnel origin? | **yes, the only one** | **never** |
+
+The two listeners share the sound queue and library but no authentication code or state. The old `ACCESS_KEY` /
+`X-Access-Key` / `?key=` mechanism is gone from the public listener; a key is worthless there and a dashboard session
+is worthless on the local listener (both are covered by `test/authIsolation.test.ts`).
+
+### Public dashboard: Discord sign-in
+
+What you see: open the public URL, press **Login with Discord**, authorize on Discord's own page, and you land on the dashboard.
+You never type Discord credentials, client ids, secrets or tokens into the dashboard. Those stay in the server's `.env`.
+
+**Which Discord values are which**
+
+| `.env` variable | What it is | Where it is used |
+|---|---|---|
+| `DISCORD_TOKEN` | the bot's token (already set up) | the bot connecting to Discord. Never used for sign-in |
+| `DISCORD_CLIENT_ID` | the application's id (identifies *your app* to Discord) | OAuth authorize URL (public by nature) |
+| `DISCORD_CLIENT_SECRET` | the application's OAuth secret | server-side only, sent once to Discord's token endpoint |
+
+None of these is a user's password. The client secret is never sent to the browser, put in a page, URL, API response or log
+(`test/publicHostAndLogin.test.ts` checks this against a real run of the flow).
+
+**You can reuse the bot's existing Discord application.** A bot lives inside an application, and the same application has an OAuth2
+section. The client id equals the bot's id: it is in the `Invite:` link the bot prints at startup (`client_id=...`).
+
+**Discord Developer Portal** (https://discord.com/developers/applications > your bot's application):
+1. **OAuth2 > Client information:** copy **Client ID**; press **Reset Secret** to get the **Client Secret** (shown once; resetting does
+   not affect the bot token). Put both in `.env`.
+2. **OAuth2 > Redirects > Add Redirect:** exactly `PUBLIC_BASE_URL` + `/auth/callback`, for example
+   `https://dash.example.com/auth/callback`. Scheme, host and path must match character for character.
+3. Scope: **`identify`** only (the server requests it itself; nothing to tick for the login). No bot permissions are involved.
+
+**`.env` values**
+
+| Variable | Needed? | Meaning |
+|---|---|---|
+| `PUBLIC_BASE_URL` | **required** | the address people type, e.g. `https://dash.example.com` (no path, no trailing slash) |
+| `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` | **required** | see above |
+| `DASHBOARD_ALLOWED_USER_IDS` and/or `DASHBOARD_GUILD_ID` | **at least one required** | who may sign in; with neither, **nobody** can (fail closed) |
+| `DASHBOARD_ROLE_IDS` | optional | with `DASHBOARD_GUILD_ID`: only members holding one of these roles |
+| `SESSION_MAX_HOURS` | optional, 12 | absolute session lifetime |
+| `SESSION_RECHECK_MINUTES` | optional, 10 | how often live sessions are re-authorized (0 = off) |
+| `PUBLIC_HOST` | optional, `127.0.0.1` | bind address of the tunnel origin. Leave it alone |
+| `PORT` | optional, 3939 | port of the tunnel origin |
+
+Everything else in your `.env` (sounds, queue, imports, FFmpeg, yt-dlp, database paths...) is untouched. To add the new lines without
+rewriting your file (PowerShell, from the project folder; edit the values afterwards, and remove an old `HOST=` line if you have one):
+
+    Add-Content .env "`nPUBLIC_BASE_URL=https://dash.example.com`nDISCORD_CLIENT_ID=`nDISCORD_CLIENT_SECRET=`nDASHBOARD_ALLOWED_USER_IDS="
+
+**Who is authorized.** After Discord proves who you are, the server (not the browser) decides: your Discord user id is in
+`DASHBOARD_ALLOWED_USER_IDS`, or you are a member of `DASHBOARD_GUILD_ID` (the bot must be in that server) and, if `DASHBOARD_ROLE_IDS`
+is set, hold one of those roles. Membership is looked up by the bot, so no extra OAuth scope is needed. Client-supplied identities are never trusted.
+
+**Tunnel setup.** Point the tunnel at `http://127.0.0.1:3939` and leave Cloudflare's *HTTP Host Header* origin setting empty (its default),
+so the original hostname reaches the server. Only the tunnel hostname is served: any other `Host` gets HTTP 421.
+
+**Troubleshooting HTTP 421.** 421 means the `Host` header of the request is not the host in `PUBLIC_BASE_URL`; nothing else produces it.
+The console prints one line per refused value, for example `refused a request with Host "127.0.0.1:3939" ... it only serves "dash.example.com"`.
+- `PUBLIC_BASE_URL` unset: the server expects `localhost:3939`, so the tunnel hostname, `127.0.0.1` and LAN addresses all give 421.
+- Browsing the tunnel hostname but `PUBLIC_BASE_URL` has a different one, or a different scheme/port in dev: fix `PUBLIC_BASE_URL`.
+- Local development: set `PUBLIC_BASE_URL=http://localhost:3939`, add `http://localhost:3939/auth/callback` as a redirect in the portal
+  (Discord accepts http for localhost), and open exactly `http://localhost:3939/`.
+No proxy header (`X-Forwarded-Host`, `Forwarded`, `CF-*`) is trusted for anything; the cookie's `Secure` flag comes from `PUBLIC_BASE_URL`.
+
+**Which address is the public listener really on?** `PUBLIC_HOST` (default `127.0.0.1`). The old generic `HOST` is honored only if it is a
+loopback address: an old `HOST=0.0.0.0` is ignored (with a startup warning) so a LAN setting from the one-listener days cannot widen the
+tunnel origin. Note that a variable set in Windows' environment beats the same name in `.env` (Node's `--env-file` does not override it).
+Check: `findstr /b "HOST PUBLIC_HOST" .env` and `echo %HOST%`; the `Public dashboard: listening on ...` line shows the effective value.
+
+**How the login works.** Scope `identify` only, authorization-code flow with PKCE (S256; Discord lists it in its published OAuth metadata
+at `https://discord.com/.well-known/oauth-authorization-server`) and a `state`. The state is single-use, expires after 10 minutes, and is
+also bound to the browser that started the login by a short-lived cookie, so a login link made by someone else is rejected. The access
+token is used once to read your user id and is then revoked. The session id is random, kept only in server memory (**a bot restart signs
+everybody out**), and sent as an `HttpOnly; SameSite=Lax` cookie (`__Host-` prefixed and `Secure` when `PUBLIC_BASE_URL` is https). It
+expires `SESSION_MAX_HOURS` after sign-in no matter what. Writes need a JSON (or upload) content type **and** an `Origin` header that is
+exactly your site. `POST /auth/logout`, expiry or revocation also close that session's live event streams.
+
+**Changes after sign-in.** Every `SESSION_RECHECK_MINUTES` the server re-checks each live session against the current rules. Losing
+the role or leaving the server ends the session (and its stream) within that interval. If Discord cannot be reached the check is
+inconclusive and sessions are kept until they expire. Removing a user id from `DASHBOARD_ALLOWED_USER_IDS` needs a bot restart (which
+ends all sessions anyway).
+
+### Local integration API
+
+    GET  /api/voice    current voice snapshot        GET /events      live stream (SSE)
     GET  /api/sounds   names, play counts, tags      GET /api/status  playback queue
-    POST /api/play     {"sound","guildId","channelId"}   JSON only, header X-Access-Key if ACCESS_KEY is set
+    POST /api/play     {"sound","guildId","channelId"}                (JSON only)
+    POST /api/queue/skip | /api/queue/remove | /api/queue/clear-pending
+
+Send the key as `X-Access-Key: <key>` on **every** request (reads and `/events` included). It is never accepted in the URL, so
+native `EventSource` (which cannot set headers) cannot be used. Read the stream with `fetch` instead:
+
+    const res = await fetch("http://127.0.0.1:3940/events", { headers: { "X-Access-Key": KEY }, signal });
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;                         // reconnect with a delay here
+      buf += value;
+      for (let i; (i = buf.indexOf("\n\n")) >= 0; buf = buf.slice(i + 2)) {
+        const data = buf.slice(0, i).split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
+        if (data) handle(JSON.parse(data));
+      }
+    }
+
+The Nexus widget's code was not available when this was written: whether it uses `EventSource` + `?key=` is unverified, and if it does it
+must be changed to the header form above. There is no CORS:
+browsers on other origins cannot call it. It does not serve the dashboard, `/import` or `/logs`.
+
+The listener only starts when a key exists: `LOCAL_ACCESS_KEY`, or your existing `ACCESS_KEY`, which now means "local key" and nothing
+else. Use a long random value, for example `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`.
+`LOCAL_HOST` must be `127.0.0.1` or one specific address of this PC; `0.0.0.0` / `::` are refused at startup.
+
+### What actually keeps the local API private
+
+A different port is not a security boundary, and neither is a bind address by itself. What you get:
+
+- **`LOCAL_HOST=127.0.0.1` (default):** only processes on this PC can connect. Other devices cannot, unless something running on this PC
+  forwards to it. Things that do that: a `cloudflared` ingress rule or WARP/private-network route that points at it, `netsh interface portproxy`,
+  an SSH/VPN/RDP port forward, a reverse proxy, or other software that proxies localhost. Do not add any of these for port 3940.
+  Any local program (or malware) running as any user on the PC can still try to connect; the access key is what stops it.
+- **`LOCAL_HOST=<LAN address>` (only if a device on the LAN, such as the Nexus panel, must reach it):** every device that can reach that address
+  can connect, so add the firewall rule below and keep the access key secret. Whether it is reachable from the internet depends on your router
+  (port forwarding, UPnP, DMZ, IPv6 firewalling) and on the tunnel configuration, not on this setting.
+- **Cloudflare Tunnel:** the ingress must list one service, `http://127.0.0.1:3939`, with `http_status:404` as the catch-all. Never list port 3940, a
+  wildcard hostname, or `localhost` services you did not intend to publish.
+
+Check it yourself rather than trusting the config:
+
+    netstat -ano | findstr ":3939 :3940"          (expect 127.0.0.1 or your one LAN address, never 0.0.0.0 or [::])
+    curl.exe -i http://127.0.0.1:3940/api/sounds   (expect 401)
+    curl.exe -i -H "X-Access-Key: KEY" http://127.0.0.1:3940/api/sounds   (expect 200)
+    curl.exe -i "http://127.0.0.1:3940/api/sounds?key=KEY"                (expect 401)
+    curl.exe -i https://YOUR-HOSTNAME/api/sounds   (expect 401; and the tunnel must not answer for port 3940 at all)
+    from a phone on mobile data (not Wi-Fi): http://YOUR-PUBLIC-IP:3940 must not connect
+
+### Windows Firewall
+
+Loopback traffic is not filtered by Windows Firewall, and `cloudflared` only makes outbound connections, so with the default binds
+**no inbound rule is needed for 3939 or 3940, and none should exist.** Run as Administrator.
+
+Check for rules that already allow these ports (a broad "Node.js" allow rule created by the first-run prompt is common):
+
+    Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True |
+      Get-NetFirewallPortFilter | Where-Object { $_.LocalPort -in '3939','3940','Any' -and $_.Protocol -in 'TCP','Any' }
+    Get-NetFirewallApplicationFilter | Where-Object Program -like '*node.exe'
+
+If (and only if) a LAN device must reach the local API, bind `LOCAL_HOST` to the PC's LAN address and allow just those devices:
+
+    New-NetFirewallRule -DisplayName "Aboda local API 3940 (LAN allow-list)" -Direction Inbound -Action Allow -Protocol TCP `
+      -LocalPort 3940 -LocalAddress 192.168.1.20 -RemoteAddress 192.168.1.50,192.168.1.60 -Profile Private
+    New-NetFirewallRule -DisplayName "Aboda local API 3940 (block everyone else)" -Direction Inbound -Action Block -Protocol TCP `
+      -LocalPort 3940 -Profile Public,Domain
+
+Give the PC (and the panel) fixed addresses, replace the example addresses, and note that Windows evaluates Block rules before Allow
+rules: the block above is limited to the Public and Domain profiles so it does not cancel the Private-profile allow. Mark the home network
+as Private, not Public. Do not create any inbound rule for 3939.
 
 ## Optional: pre-convert hot sounds (about 10x less CPU per play)
 
@@ -103,7 +264,7 @@ straight away (no restart); reload the soundboard page to see it in the grid.
 - Real MP3/WAV files that need no trimming are saved untouched. Everything else becomes 48 kHz stereo MP3 (WAV if `.mp3` is not in `ACCEPTED_EXTENSIONS`).
 - Limits: `IMPORT_MAX_UPLOAD_MB` (100) for the original file, one FFmpeg job at a time, a timeout per job (`IMPORT_PROCESS_TIMEOUT_SEC`),
   at most 3 pending imports, a free-disk-space check, and staged files are deleted after 30 minutes.
-- Same access rules as playback: with `ACCESS_KEY` set open `/import?key=...`; beyond localhost without a key, uploads are refused.
+- Same access rules as the rest of the dashboard: you must be signed in with Discord (public listener only; `/import` is not served on the local API).
 - Never overwrites: a name that already exists (any letter case) is refused. Names: letters, numbers, spaces, `-`, `_`.
 
       GET  /api/import/config   limits, formats, readiness       POST /api/import/upload   raw file body, X-Filename header

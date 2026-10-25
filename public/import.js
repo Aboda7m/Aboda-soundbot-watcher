@@ -2,15 +2,12 @@
 // Independent of the dashboard scripts.
 const $ = (id) => document.getElementById(id);
 
-// Page key (?key=...) is forwarded to the API as a header; the preview <audio> can't send headers, so it uses the query.
-const key = new URLSearchParams(location.search).get("key");
-const authHeaders = key ? { "X-Access-Key": key } : {};
-const keyQuery = key ? `&key=${encodeURIComponent(key)}` : "";
+// Authentication is the Discord sign-in session cookie, which the browser also sends for the preview <audio>.
+const authHeaders = {};
 
 const steps = ["pick", "progress", "review", "done"];
 const state = { limits: null, staged: null, dirty: false, rendering: false };
 
-for (const a of [$("back"), $("back2")]) a.href = "/" + location.search;
 
 function show(step, focusId) {
   for (const s of steps) $(`step-${s}`).hidden = s !== step;
@@ -48,7 +45,7 @@ async function api(path, options = {}) {
   let data = null;
   try { data = await res.json(); } catch { /* not JSON */ }
   if (!res.ok) {
-    const msg = res.status === 401 ? "Access key missing or wrong. Open this page with ?key=..." : data?.error || `Server returned ${res.status}.`;
+    const msg = res.status === 401 ? "Your session has expired. Reload the page to sign in again." : data?.error || `Server returned ${res.status}.`;
     throw Object.assign(new Error(msg), { status: res.status });
   }
   return data;
@@ -110,7 +107,7 @@ function upload(file) {
       let data = null;
       try { data = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
       if (xhr.status >= 200 && xhr.status < 300 && data) resolve(data);
-      else reject(new Error(xhr.status === 401 ? "Access key missing or wrong. Open this page with ?key=..." : data?.error || `Server returned ${xhr.status}.`));
+      else reject(new Error(xhr.status === 401 ? "Your session has expired. Reload the page to sign in again." : data?.error || `Server returned ${xhr.status}.`));
     };
     xhr.onerror = () => reject(new Error("Could not reach the server, or it closed the connection. Check the file size and try again."));
     xhr.send(file);
@@ -203,7 +200,7 @@ function renderMeta() {
 function loadPreview() {
   const p = $("player");
   p.pause();
-  p.src = `/api/import/preview/${state.staged.id}?v=${state.staged.result.version}${keyQuery}`;
+  p.src = `/api/import/preview/${state.staged.id}?v=${state.staged.result.version}`;
   p.load();
 }
 

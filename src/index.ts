@@ -2,10 +2,14 @@
 import { Events } from "discord.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "./config.ts";
+import { checkNetworkConfig, loadConfig } from "./config.ts";
 import { createClient, toVoiceMove } from "./discord/client.ts";
 import { registerTextCommands } from "./discord/textCommands.ts";
-import { createHttpServer } from "./http/server.ts";
+import { createPublicServer } from "./http/server.ts";
+import { createLocalServer } from "./http/localServer.ts";
+import { createDiscordOAuth } from "./http/auth/discordOAuth.ts";
+import { createAuthorizer } from "./http/auth/authorize.ts";
+import { SessionStore } from "./http/auth/sessions.ts";
 import { ImportService } from "./import/ImportService.ts";
 import { createCooldown, planIntros } from "./sound/introRules.ts";
 import { SoundLibrary } from "./sound/SoundLibrary.ts";
@@ -18,6 +22,14 @@ import { Watcher } from "./watcher/Watcher.ts";
 const config = loadConfig();
 if (!config.token) {
   console.error("DISCORD_TOKEN is missing. Copy .env.example to .env and fill it in.");
+  process.exit(1);
+}
+
+const net = checkNetworkConfig(config);
+for (const w of net.warnings) console.warn(`WARNING: ${w}`);
+if (net.errors.length) {
+  for (const e of net.errors) console.error(`Refusing to start: ${e}`);
+  console.error("Nothing was started. Fix .env and start again.");
   process.exit(1);
 }
 
@@ -107,35 +119,84 @@ try {
   process.exit(1);
 }
 
-const server = createHttpServer({
-  host: config.host,
-  port: config.port,
-  accessKey: config.accessKey,
+const logError = (msg: string, err?: unknown) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? ""));
+
+// What both listeners serve. The listeners differ only in how they authenticate.
+const core = {
   watcher,
   library,
   repo,
   queue,
+  canTarget: (guildId: string, channelId: string) =>
+    !!client.guilds.cache.get(guildId)?.channels.cache.get(channelId)?.isVoiceBased(),
+};
+
+// ---- PUBLIC listener: Discord OAuth2 + server-side sessions (the Cloudflare Tunnel origin) ----
+const sessions = new SessionStore({ maxAgeMs: config.sessionMaxMs });
+const authorizer = createAuthorizer({
+  userIds: config.dashboardUserIds,
+  guildId: config.dashboardGuildId || undefined,
+  roleIds: config.dashboardRoleIds,
+  log: logError,
+  fetchMember: async (guildId, userId) => {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) throw new Error("dashboard server is not loaded (bot offline or not in that server)");
+    try {
+      const member = await guild.members.fetch(userId);
+      return { roles: [...member.roles.cache.keys()] };
+    } catch (err) {
+      // Discord error 10007 = Unknown Member, 10013 = Unknown User: a definite "not in the server".
+      const code = (err as { code?: number }).code;
+      if (code === 10007 || code === 10013) return null;
+      throw err; // anything else is "unknown", not "no"
+    }
+  },
+});
+const oauthReady = !!(config.publicBaseUrl && config.discordClientId && config.discordClientSecret);
+const publicBase = config.publicBaseUrl || `http://localhost:${config.publicPort}`;
+const publicServer = createPublicServer({
+  ...core,
+  publicBaseUrl: publicBase,
+  sessions,
+  oauth: oauthReady
+    ? createDiscordOAuth({
+        clientId: config.discordClientId,
+        clientSecret: config.discordClientSecret,
+        redirectUri: `${publicBase}/auth/callback`,
+      })
+    : undefined,
+  authorize: authorizer,
+  recheck: authorizer.recheck,
+  recheckMs: config.sessionRecheckMs,
   importer,
   // Log viewer page (/logs). Point these at the files your bot writes its logs to.
   logs: {
     soundPlayFile: join(process.cwd(), "sound-play-logs.json"),
     voiceActivityFile: join(process.cwd(), "voice-activity-logs.json"),
   },
-  canTarget: (guildId, channelId) =>
-    !!client.guilds.cache.get(guildId)?.channels.cache.get(channelId)?.isVoiceBased(),
 });
 
-server.listen(config.port, config.host, () => {
-  console.log(`Voice page: http://${config.host === "0.0.0.0" ? "localhost" : config.host}:${config.port}/${config.accessKey ? "?key=…" : ""}`);
+// ---- LOCAL listener: access key in a header, playback/voice API only ----
+const localServer = config.localEnabled
+  ? createLocalServer({ ...core, host: config.localHost, accessKey: config.localAccessKey })
+  : undefined;
+
+publicServer.listen(config.publicPort, config.publicHost, () => {
+  console.log(`Public dashboard: listening on ${config.publicHost}:${config.publicPort}; it answers only for ${new URL(publicBase).host} (sign in at ${publicBase}/)`);
   console.log(`Sounds: ${library.list().length} found in ${config.soundsDir}`);
   // Informational only: URL imports are not built yet, so a missing yt-dlp never stops the bot.
   void checkYtDlp({ path: config.ytdlpPath }).then((y) =>
     y.available ? console.log(`yt-dlp ${y.version} (${y.path})${y.problem ? `\n  Note: ${y.problem}` : ""}`) : console.log(`yt-dlp not available: ${y.problem}`),
   );
-  const loopback = ["127.0.0.1", "localhost", "::1"].includes(config.host);
-  if (!loopback && !config.accessKey)
-    console.warn("WARNING: listening beyond localhost with no ACCESS_KEY. Reading is open and playback is disabled.");
 });
+
+if (localServer) {
+  localServer.listen(config.localPort, config.localHost, () =>
+    console.log(`Local integration API: listening on ${config.localHost}:${config.localPort} (X-Access-Key header required)`),
+  );
+} else {
+  console.log("Local integration API: off (set LOCAL_ACCESS_KEY to enable it).");
+}
 
 client.once(Events.ClientReady, (c) => {
   console.log(`Logged in as ${c.user.tag} in ${c.guilds.cache.size} server(s).`);
@@ -152,7 +213,9 @@ async function shutdown(signal: string) {
   queue.shutdown();
   repo.flush();
   watcher.close();
-  server.close();
+  publicServer.close();
+  localServer?.close();
+  sessions.close();
   importer?.close();
   await client.destroy();
   process.exit(0);

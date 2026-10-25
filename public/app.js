@@ -21,9 +21,12 @@ const SOUND_TABS = new Set(["sounds", "favorites", "recent"]);
 const MAX_RECENT = 30;
 const TAG_LIMIT = 12;
 
-// Page key (?key=...) is forwarded to the API as a header, same as before.
-const key = new URLSearchParams(location.search).get("key");
-const authHeaders = key ? { "X-Access-Key": key } : {};
+// Authentication is the Discord sign-in session cookie, sent by the browser itself. No key is ever put in the page,
+// the URL or a header. (Old bookmarks with ?key=... are cleaned up so the value does not linger in the address bar.)
+const authHeaders = {};
+if (new URLSearchParams(location.search).has("key")) {
+  history.replaceState(null, "", location.pathname + location.hash);
+}
 
 /* ---------- localStorage (falls back to memory if unavailable) ---------- */
 
@@ -232,7 +235,7 @@ async function postJson(path, payload) {
       body.error ||
         REASONS[body.reason] ||
         (res.status === 401
-          ? "Access key missing or wrong. Open this page with ?key=..."
+          ? "Your session has expired. Reload the page to sign in again."
           : `Request failed (${res.status})`),
     );
   }
@@ -249,7 +252,7 @@ function normalizePlayback(pb) {
 const guildIdOf = (entry) => entry?.guildId ?? entry?.guild?.id ?? entry?.id ?? "";
 
 async function refreshPlayback() {
-  const res = await fetch("/api/status" + location.search, {
+  const res = await fetch("/api/status", {
     headers: authHeaders,
     cache: "no-store",
   });
@@ -832,14 +835,14 @@ async function loadSounds(quiet = false) {
   }
 
   try {
-    const res = await fetch("/api/sounds" + location.search, {
+    const res = await fetch("/api/sounds", {
       headers: authHeaders,
       cache: "no-store",
     });
 
     if (!res.ok) {
       throw new Error(
-        res.status === 401 ? "Access key missing or wrong." : `Server returned ${res.status}.`,
+        res.status === 401 ? "Your session has expired. Reload the page to sign in again." : `Server returned ${res.status}.`,
       );
     }
 
@@ -1277,7 +1280,7 @@ let retryTimer = null;
 
 function connect() {
   clearTimeout(retryTimer);
-  source = new EventSource("/events" + location.search);
+  source = new EventSource("/events");
 
   source.onopen = () => {
     retries = 0;
@@ -1299,6 +1302,12 @@ function connect() {
 
     if (source.readyState === EventSource.CLOSED) {
       source.close();
+      // A refused stream usually means the sign-in session ended: reloading sends the browser to Discord to sign in again.
+      fetch("/api/status", { cache: "no-store" })
+        .then((r) => {
+          if (r.status === 401) location.reload();
+        })
+        .catch(() => {});
       retries = Math.min(retries + 1, 5);
       retryTimer = setTimeout(connect, Math.min(3000 * retries, 15000));
     }
@@ -1449,18 +1458,6 @@ document.addEventListener("visibilitychange", () => {
   if (Date.now() - state.soundsLoadedAt > 60_000) loadSounds(true);
   refreshPlayback().catch(() => {});
 });
-
-/* ---------- header page links: carry ?key=... over to the other pages ---------- */
-for (const [id, path] of [["importSoundsButton", "/import"], ["logsButton", "/logs"]]) {
-  const link = document.getElementById(id);
-  if (!link) continue;
-  const currentUrl = new URL(window.location.href);
-  const target = new URL(path, currentUrl.origin);
-  if (currentUrl.searchParams.has("key")) {
-    target.searchParams.set("key", currentUrl.searchParams.get("key"));
-  }
-  link.href = target.toString();
-}
 
 installCustomSelect($("guild-select"));
 installCustomSelect($("channel-select"));

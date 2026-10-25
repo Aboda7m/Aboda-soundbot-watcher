@@ -5,7 +5,7 @@ import { ImportError, type ImportService } from "../import/ImportService.ts";
 /** What the import routes borrow from server.ts so they share its auth, headers and JSON helper. */
 export interface RouteKit {
   json(res: ServerResponse, status: number, body: unknown): void;
-  /** Same guard as every other state-changing route (origin check + access key), for the given content type. */
+  /** Same guard as every other state-changing route on the public listener (content type + exact Origin), for the given content type. */
   guard(req: IncomingMessage, res: ServerResponse, contentType: string): boolean;
   readBody(req: IncomingMessage): Promise<string>;
   headers: Record<string, string>;

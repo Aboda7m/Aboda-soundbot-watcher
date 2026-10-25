@@ -4,10 +4,8 @@
 // Independent of the dashboard scripts.
 const $ = (id) => document.getElementById(id);
 
-// Page key (?key=...) is forwarded to the API as a header, same as the other pages.
-const key = new URLSearchParams(location.search).get("key");
-const authHeaders = key ? { "X-Access-Key": key } : {};
-$("back").href = "/" + location.search;
+// Authentication is the Discord sign-in session cookie, sent by the browser itself.
+const authHeaders = {};
 
 const PAGE = 200; // entries per "Load older" and for the first load
 const ALL_CHUNK = 5000; // largest chunk the server returns (used by "Load all" and by polling)
@@ -258,7 +256,7 @@ async function api(params) {
   if (!res.ok) {
     throw new Error(
       res.status === 401
-        ? "Access key missing or wrong. Open this page with ?key=..."
+        ? "Your session has expired. Reload the page to sign in again."
         : data?.error || `Server returned ${res.status}.`,
     );
   }

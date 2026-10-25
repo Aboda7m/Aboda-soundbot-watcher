@@ -5,9 +5,8 @@ import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, rea
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import type { Server } from "node:http";
 import { ImportError, ImportService } from "../src/import/ImportService.ts";
-import { createHttpServer } from "../src/http/server.ts";
+import { startPublic, type PublicHarness } from "./helpers/harness.ts";
 import { SoundLibrary } from "../src/sound/SoundLibrary.ts";
 
 const hasFfmpeg = (() => {
@@ -485,53 +484,51 @@ test("reports a clear error when ffmpeg is missing", async () => {
 
 // ---------------------------------------------------------------------------------------- HTTP
 
-let server: Server;
+let pubH: PublicHarness;
 let base = "";
+let cookie = ""; // signed-in dashboard session (Discord OAuth is faked; see helpers/harness.ts)
 let httpSvc: ImportService;
 let httpSounds = "";
-const KEY = "s3cret";
+const authFetch = (url: string, init: RequestInit = {}) => fetch(url, { ...init, headers: { Cookie: cookie, ...(init.headers as Record<string, string> | undefined) } });
 
 before(async () => {
   const s = setup({ maxStaged: 10 });
   httpSvc = s.svc;
   httpSounds = s.soundsDir;
-  server = createHttpServer({
-    host: "127.0.0.1", port: 0, accessKey: KEY,
-    watcher: { payloadJson: () => "{}", addClient: () => {} } as never,
+  pubH = await startPublic({
     library: s.library,
     repo: { sounds: () => [] } as never,
-    queue: { enqueue: () => ({ ok: true, position: 1 }), status: () => [] } as never,
     canTarget: () => true,
     importer: s.svc,
   });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
-  base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  base = pubH.base;
+  cookie = await pubH.signIn();
 });
-after(() => { server.close(); httpSvc.close(); });
+after(() => { pubH.close(); httpSvc.close(); });
 
 const upload = (file: string, headers: Record<string, string> = {}, name = file) =>
   fetch(`${base}/api/import/upload`, {
     method: "POST",
-    headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(name), "X-Access-Key": KEY, ...headers },
+    headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(name), Cookie: cookie, Origin: base, ...headers },
     body: readFileSync(join(fixtures, file)),
   });
 const postJson = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-  fetch(`${base}${path}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Access-Key": KEY, ...headers }, body: JSON.stringify(body) });
+  fetch(`${base}${path}`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: cookie, Origin: base, ...headers }, body: JSON.stringify(body) });
 
 test("http: page and assets are served with a media-src CSP; the dashboard's CSP is unchanged", async () => {
-  const page = await fetch(`${base}/import`);
+  const page = await authFetch(`${base}/import`);
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-type") ?? "", /text\/html/);
   assert.match(page.headers.get("content-security-policy") ?? "", /media-src 'self'/);
-  assert.equal((await fetch(`${base}/import.js`)).status, 200);
-  assert.equal((await fetch(`${base}/import.css`)).status, 200);
-  const dash = await fetch(`${base}/`);
+  assert.equal((await authFetch(`${base}/import.js`)).status, 200);
+  assert.equal((await authFetch(`${base}/import.css`)).status, 200);
+  const dash = await authFetch(`${base}/`);
   assert.equal(dash.status, 200);
   assert.doesNotMatch(dash.headers.get("content-security-policy") ?? "", /media-src/);
 });
 
 test("http: config reports limits, default trim and supported formats", opts, async () => {
-  const cfg = await (await fetch(`${base}/api/import/config?key=${KEY}`)).json() as Record<string, unknown>;
+  const cfg = await (await authFetch(`${base}/api/import/config`)).json() as Record<string, unknown>;
   assert.equal(cfg.ready, true);
   assert.equal(cfg.defaultTrimSec, 10);
   assert.equal(cfg.maxOutputSec, 120);
@@ -539,17 +536,17 @@ test("http: config reports limits, default trim and supported formats", opts, as
   assert.equal(cfg.maxDurationSec, undefined); // the old fixed duration limit is gone
 });
 
-test("http: import API requires the access key and refuses cross-origin or wrong content types", opts, async () => {
+test("http: import API requires a dashboard session and refuses cross-origin or wrong content types", opts, async () => {
   assert.equal((await fetch(`${base}/api/import/config`)).status, 401);
-  assert.equal((await upload("tone.wav", { "X-Access-Key": "wrong" })).status, 401);
+  assert.equal((await upload("tone.wav", { Cookie: "aboda_sid=wrong" })).status, 401);
   assert.equal((await upload("tone.wav", { Origin: "https://evil.example" })).status, 403);
   assert.equal((await upload("tone.wav", { "Content-Type": "application/json" })).status, 415);
   assert.equal((await upload("tone.wav", { "Content-Type": "text/plain" })).status, 415);
   const id = "11111111-1111-1111-1111-111111111111";
-  assert.equal((await postJson("/api/import/save", { id, name: "y" }, { "X-Access-Key": "wrong" })).status, 401);
-  assert.equal((await postJson("/api/import/process", { id, mode: "first" }, { "X-Access-Key": "wrong" })).status, 401);
+  assert.equal((await postJson("/api/import/save", { id, name: "y" }, { Cookie: "aboda_sid=wrong" })).status, 401);
+  assert.equal((await postJson("/api/import/process", { id, mode: "first" }, { Cookie: "aboda_sid=wrong" })).status, 401);
   assert.equal((await postJson("/api/import/process", { id, mode: "first" }, { Origin: "https://evil.example" })).status, 403);
-  assert.equal((await fetch(`${base}/api/import/process`, { method: "POST", headers: { "Content-Type": "text/plain", "X-Access-Key": KEY }, body: "{}" })).status, 415);
+  assert.equal((await fetch(`${base}/api/import/process`, { method: "POST", headers: { "Content-Type": "text/plain", Cookie: cookie, Origin: base }, body: "{}" })).status, 415);
   assert.equal((await fetch(`${base}/api/import/preview/${id}`)).status, 401);
 });
 
@@ -562,7 +559,7 @@ test("http: upload (default 10 s) -> re-trim -> preview with Range -> save -> li
   assert.equal(info.result.mode, "first");
   near(info.result.durationSec, 10, 0.3);
 
-  const defaultPreview = Buffer.from(await (await fetch(`${base}/api/import/preview/${info.id}?key=${KEY}`)).arrayBuffer());
+  const defaultPreview = Buffer.from(await (await authFetch(`${base}/api/import/preview/${info.id}`)).arrayBuffer());
 
   const proc = await postJson("/api/import/process", { id: info.id, mode: "range", start: 12, end: 14 });
   assert.equal(proc.status, 200);
@@ -571,17 +568,17 @@ test("http: upload (default 10 s) -> re-trim -> preview with Range -> save -> li
   assert.equal(pr.result.version, 2);
   near(pr.result.durationSec, 2, 0.3);
 
-  const prev = await fetch(`${base}/api/import/preview/${info.id}?v=2&key=${KEY}`);
+  const prev = await authFetch(`${base}/api/import/preview/${info.id}?v=2`);
   assert.equal(prev.status, 200);
   assert.equal(prev.headers.get("content-type"), "audio/mpeg");
   const full = Buffer.from(await prev.arrayBuffer());
   assert.notEqual(full.length, defaultPreview.length); // the preview is the new render
   assert.equal(Number(prev.headers.get("content-length")), full.length);
-  const part = await fetch(`${base}/api/import/preview/${info.id}?key=${KEY}`, { headers: { Range: "bytes=10-19" } });
+  const part = await authFetch(`${base}/api/import/preview/${info.id}`, { headers: { Range: "bytes=10-19" } });
   assert.equal(part.status, 206);
   assert.equal(part.headers.get("content-range"), `bytes 10-19/${full.length}`);
   assert.equal(Buffer.from(await part.arrayBuffer()).equals(full.subarray(10, 20)), true);
-  assert.equal((await fetch(`${base}/api/import/preview/${info.id}?key=${KEY}`, { headers: { Range: "bytes=999999999-" } })).status, 416);
+  assert.equal((await authFetch(`${base}/api/import/preview/${info.id}`, { headers: { Range: "bytes=999999999-" } })).status, 416);
 
   const badRange = await postJson("/api/import/process", { id: info.id, mode: "range", start: 100, end: 110 });
   assert.equal(badRange.status, 400);
@@ -592,9 +589,9 @@ test("http: upload (default 10 s) -> re-trim -> preview with Range -> save -> li
   assert.equal(ok.status, 201);
   assert.deepEqual(readdirSync(httpSounds), ["Boom Boom.mp3"]);
   assert.equal(statSync(join(httpSounds, "Boom Boom.mp3")).size, full.length); // what was saved is what was previewed
-  const sounds = await (await fetch(`${base}/api/sounds?key=${KEY}`)).json() as { sounds: { name: string }[] };
+  const sounds = await (await authFetch(`${base}/api/sounds`)).json() as { sounds: { name: string }[] };
   assert.deepEqual(sounds.sounds.map((s) => s.name), ["Boom Boom"]);
-  assert.equal((await fetch(`${base}/api/import/preview/${info.id}?key=${KEY}`)).status, 404);
+  assert.equal((await authFetch(`${base}/api/import/preview/${info.id}`)).status, 404);
   assert.equal((await postJson("/api/import/process", { id: info.id, mode: "first" })).status, 404);
 });
 
@@ -629,7 +626,7 @@ test("http: validation errors come back as JSON with a useful message", opts, as
   assert.equal((await upload("tone.wav", {}, "x.exe")).status, 415);
   assert.equal((await upload("tone.wav", { "X-Filename": "" })).status, 400);
   const bigBody = Buffer.alloc(6 * 1024 * 1024);
-  const big = await fetch(`${base}/api/import/upload`, { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": "big.mp3", "X-Access-Key": KEY }, body: bigBody }).catch((e: Error) => e);
+  const big = await fetch(`${base}/api/import/upload`, { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": "big.mp3", Cookie: cookie, Origin: base }, body: bigBody }).catch((e: Error) => e);
   if (big instanceof Response) assert.equal(big.status, 413); // or the server closed the connection first; both are a refusal
   assert.equal(readdirSync(httpSounds).filter((f) => f.endsWith(".tmp")).length, 0);
 });
@@ -637,24 +634,20 @@ test("http: validation errors come back as JSON with a useful message", opts, as
 test("http: discard removes a staged import", opts, async () => {
   const info = await (await upload("tone.wav")).json() as { id: string };
   assert.equal((await postJson("/api/import/discard", { id: info.id })).status, 200);
-  assert.equal((await fetch(`${base}/api/import/preview/${info.id}?key=${KEY}`)).status, 404);
+  assert.equal((await authFetch(`${base}/api/import/preview/${info.id}`)).status, 404);
   assert.equal((await postJson("/api/import/discard", {})).status, 400);
   assert.equal((await postJson("/api/import/process", {})).status, 400);
 });
 
 test("http: without an importer the import page and API do not exist", async () => {
-  const s = createHttpServer({
-    host: "127.0.0.1", port: 0, accessKey: "",
-    watcher: { payloadJson: () => "{}", addClient: () => {} } as never,
-    library: { has: () => false, list: () => [] } as never,
-    repo: { sounds: () => [] } as never,
-    queue: { enqueue: () => ({ ok: true, position: 1 }), status: () => [] } as never,
-    canTarget: () => true,
-  });
-  await new Promise<void>((r) => s.listen(0, "127.0.0.1", () => r()));
-  const b = `http://127.0.0.1:${(s.address() as { port: number }).port}`;
-  assert.equal((await fetch(`${b}/import`)).status, 404);
-  assert.equal((await fetch(`${b}/api/import/config`)).status, 404);
-  for (const p of ["save", "process", "upload"]) assert.equal((await fetch(`${b}/api/import/${p}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 404);
-  s.close();
+  const h = await startPublic();
+  try {
+    const c = await h.signIn();
+    const get = (p: string) => fetch(`${h.base}${p}`, { headers: { Cookie: c } });
+    assert.equal((await get("/import")).status, 404);
+    assert.equal((await get("/api/import/config")).status, 404);
+    for (const p of ["save", "process", "upload"]) {
+      assert.equal((await fetch(`${h.base}/api/import/${p}`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: c, Origin: h.origin }, body: "{}" })).status, 404);
+    }
+  } finally { h.close(); }
 });
