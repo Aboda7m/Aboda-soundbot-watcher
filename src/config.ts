@@ -13,7 +13,10 @@ export interface Config {
   publicBaseUrl: string;
   discordClientId: string;
   discordClientSecret: string;
-  /** Who may sign in to the public dashboard. Nobody is allowed unless at least one rule is configured. */
+  /**
+   * Legacy DASHBOARD_ALLOWED_USER_IDS. These users may sign in and use the dashboard (view + play) and nothing more.
+   * They are never owners; owners come only from OWNER_USER_IDS.
+   */
   dashboardUserIds: string[];
   dashboardGuildId: string;
   dashboardRoleIds: string[];
@@ -36,7 +39,7 @@ export interface Config {
   dbPath: string;
   /** Runtime-editable access policy (whitelist/blacklist/permissions). */
   accessFile: string;
-  /** Bot owners: full control, never blocked. OWNER_USER_IDS plus the legacy DASHBOARD_ALLOWED_USER_IDS. */
+  /** Bot owners: full control, never blocked. OWNER_USER_IDS only (legacy dashboard ids are not merged in). */
   ownerUserIds: string[];
   acceptedExtensions: string[];
   introsEnabled: boolean;
@@ -109,7 +112,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     soundsDir: resolve(env.SOUNDS_DIR ?? "./sounds"),
     dbPath: resolve(env.DB_PATH ?? "./db.json"),
     accessFile: resolve(env.ACCESS_FILE ?? "./access.json"),
-    ownerUserIds: [...new Set([...list(env.OWNER_USER_IDS), ...list(env.DASHBOARD_ALLOWED_USER_IDS)])],
+    ownerUserIds: [...new Set(list(env.OWNER_USER_IDS))],
     acceptedExtensions: (env.ACCEPTED_EXTENSIONS ?? ".mp3,.wav")
       .split(",")
       .map((e) => e.trim().toLowerCase())
@@ -175,8 +178,14 @@ export function checkNetworkConfig(c: Config): NetworkCheck {
   if (c.ignoredLegacyHost) {
     warnings.push(`HOST=${c.ignoredLegacyHost} was ignored: the public listener stays on 127.0.0.1 (the tunnel origin). Remove HOST from .env, or set PUBLIC_HOST to choose a different address deliberately. For LAN devices use LOCAL_HOST (local listener).`);
   }
-  if (c.ownerUserIds.length === 0 && !c.dashboardGuildId) {
-    warnings.push("No OWNER_USER_IDS, DASHBOARD_ALLOWED_USER_IDS or DASHBOARD_GUILD_ID set: nobody is authorized to sign in to the public dashboard, and nobody can use the !access command or import sounds.");
+  if (c.ownerUserIds.length === 0) {
+    warnings.push("OWNER_USER_IDS is not set: nobody can use the !access command or has full administrative access, and only users granted permissions can import sounds or read logs.");
+  }
+  if (c.ownerUserIds.length === 0 && c.dashboardUserIds.length === 0 && !c.dashboardGuildId) {
+    warnings.push("No OWNER_USER_IDS, DASHBOARD_ALLOWED_USER_IDS or DASHBOARD_GUILD_ID set: nobody is authorized to sign in to the public dashboard (the owner can also grant the dashboard permission with !access grant).");
+  }
+  if (c.dashboardUserIds.some((id) => !c.ownerUserIds.includes(id))) {
+    warnings.push("DASHBOARD_ALLOWED_USER_IDS users are dashboard-only (sign in, view, play). They are no longer treated as owners; put an id in OWNER_USER_IDS to give full control.");
   }
   if (c.dashboardRoleIds.length > 0 && !c.dashboardGuildId) {
     warnings.push("DASHBOARD_ROLE_IDS is ignored without DASHBOARD_GUILD_ID.");

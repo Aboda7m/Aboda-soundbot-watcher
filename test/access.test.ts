@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AccessPolicy, CAPABILITIES } from "../src/access/AccessPolicy.ts";
@@ -135,4 +135,138 @@ test("a missing file means defaults, and the file is created on the first change
   assert.equal(a.canUseBot(G1, U1), true);
   a.allowUser(U1);
   assert.deepEqual(JSON.parse(readFileSync(p, "utf8")).allowedUsers, [U1]);
+});
+
+const bump = (p: string, secs = 5) => {
+  const t = new Date(Date.now() + secs * 1000);
+  utimesSync(p, t, t);
+};
+
+const DEFAULT_FILE = {
+  version: 1,
+  whitelistEnabled: false,
+  blacklistEnabled: false,
+  allowedGuilds: [],
+  allowedUsers: [],
+  blockedGuilds: [],
+  blockedUsers: [],
+  grants: {},
+};
+
+test("a missing access.json is created at startup with the open defaults (and nested folders)", () => {
+  const p = join(mkdtempSync(join(tmpdir(), "access-")), "data", "access.json");
+  const a = new AccessPolicy(p, { owners: [OWNER] });
+  assert.ok(existsSync(p), "created without any change being made");
+  assert.deepEqual(JSON.parse(readFileSync(p, "utf8")), DEFAULT_FILE);
+  assert.equal(a.canUseBot(G1, U1), true);
+  assert.equal(a.guildAllowed(G1), true);
+  // no credentials or owner ids belong in this file
+  assert.doesNotMatch(readFileSync(p, "utf8"), /token|secret|owner|key/i);
+  // a restart reads it back unchanged
+  const b = new AccessPolicy(p, { owners: [OWNER] });
+  assert.deepEqual(b.snapshot().grants, {});
+  assert.equal(b.snapshot().whitelistEnabled, false);
+});
+
+test("an existing valid file is never replaced by the defaults at startup", () => {
+  const p = file();
+  writeFileSync(p, JSON.stringify({ ...DEFAULT_FILE, whitelistEnabled: true, allowedUsers: [U1], grants: { [U2]: ["logs"] } }));
+  const a = new AccessPolicy(p, { owners: [OWNER] });
+  assert.equal(a.snapshot().whitelistEnabled, true);
+  assert.equal(a.can(U2, "logs"), true);
+  assert.equal(JSON.parse(readFileSync(p, "utf8")).allowedUsers[0], U1);
+});
+
+test("empty, missing or partly filled lists never switch whitelist mode on", () => {
+  for (const content of ["{}", JSON.stringify({ allowedGuilds: [], allowedUsers: [] }), JSON.stringify({ allowedUsers: [U1], allowedGuilds: [G1] }), JSON.stringify({ version: 1, blacklistEnabled: true })]) {
+    const p = file();
+    writeFileSync(p, content);
+    const a = new AccessPolicy(p, { owners: [OWNER] });
+    assert.equal(a.snapshot().whitelistEnabled, false, content);
+    assert.equal(a.canUseBot(G2, U2), true, content);
+    assert.equal(a.guildAllowed(G2), true, content);
+  }
+});
+
+test("whitelist enabled explicitly with empty lists admits owners only; owners stay separate from grants", () => {
+  const a = AccessPolicy.inMemory([OWNER]);
+  a.setWhitelist(true);
+  assert.equal(a.canUseBot(G1, U1), false);
+  assert.equal(a.canUseBot(G1, OWNER), true);
+  assert.equal(a.guildAllowed(G1), false);
+  assert.equal(a.guildAllowed(G1, OWNER), true, "owners reach any dashboard target");
+  assert.equal(a.guildAllowed(G1, U1), false);
+  a.setBlacklist(true);
+  a.blockGuild(G1);
+  assert.equal(a.guildAllowed(G1, OWNER), true, "...even a blocked server");
+  assert.equal(a.canUseBot(G1, OWNER), true);
+  assert.deepEqual(a.snapshot().grants, {}, "owners are not stored as grants");
+  assert.equal(a.isOwner(U1), false);
+  a.grant(U1, "dashboard");
+  assert.equal(a.isOwner(U1), false, "a grant never makes an owner");
+  assert.equal(a.can(U1, "import"), false);
+});
+
+test("legacy dashboard users (DASHBOARD_ALLOWED_USER_IDS) get the dashboard only: not owners, not persisted", () => {
+  const p = file();
+  const a = new AccessPolicy(p, { owners: [OWNER], dashboardUsers: [U1] });
+  assert.equal(a.isOwner(U1), false);
+  assert.equal(a.can(U1, "dashboard"), true);
+  for (const cap of CAPABILITIES.filter((c) => c !== "dashboard")) assert.equal(a.can(U1, cap), false, cap);
+  assert.deepEqual(a.snapshot().owners, [OWNER]);
+  assert.deepEqual(a.snapshot().dashboardUsers, [U1]);
+  // bot access follows the normal rules (they are not exempt from whitelist/blacklist)
+  a.setWhitelist(true);
+  assert.equal(a.canUseBot(G1, U1), false);
+  // a blocked legacy user loses even the dashboard
+  a.setBlacklist(true);
+  a.blockUser(U1);
+  assert.equal(a.can(U1, "dashboard"), false);
+  assert.deepEqual(JSON.parse(readFileSync(p, "utf8")).grants, {}, "never copied into access.json");
+  assert.equal(JSON.parse(readFileSync(p, "utf8")).dashboardUsers, undefined);
+});
+
+test("a file that becomes invalid while running is never overwritten; changes are refused until it is fixed", () => {
+  const p = file();
+  const logs: string[] = [];
+  const a = new AccessPolicy(p, { owners: [OWNER], reloadCheckMs: 0, log: (m) => void logs.push(m) });
+  a.grant(U1, "import");
+  a.setWhitelist(true);
+
+  writeFileSync(p, '{"whitelistEnabled": tru'); // a hand edit in progress
+  bump(p);
+  assert.equal(a.can(U1, "import"), true, "last good grants stay in force");
+  assert.equal(a.canUseBot(G1, U2), false, "last good whitelist stays in force");
+  assert.throws(() => a.grant(U2, "logs"), /not valid.*left alone/s);
+  assert.throws(() => a.setBlacklist(true), /not valid/);
+  assert.equal(readFileSync(p, "utf8"), '{"whitelistEnabled": tru', "the broken file was not touched");
+
+  // fixed by hand: the edit is picked up, nothing from before is lost, and changes work again
+  writeFileSync(p, JSON.stringify({ ...DEFAULT_FILE, grants: { [U1]: ["import"], [U2]: ["entrance.manage"] } }));
+  bump(p, 10);
+  a.grant(U2, "logs");
+  assert.deepEqual(JSON.parse(readFileSync(p, "utf8")).grants, { [U1]: ["import"], [U2]: ["entrance.manage", "logs"] });
+  assert.ok(logs.some((l) => /invalid/.test(l)));
+});
+
+test("a deleted file is recreated from the running rules on the next change", () => {
+  const p = file();
+  const a = new AccessPolicy(p, { owners: [OWNER], reloadCheckMs: 0 });
+  a.grant(U1, "import");
+  rmSync(p);
+  assert.equal(a.can(U1, "import"), true);
+  a.allowUser(U2);
+  const saved = JSON.parse(readFileSync(p, "utf8"));
+  assert.deepEqual(saved.grants, { [U1]: ["import"] });
+  assert.deepEqual(saved.allowedUsers, [U2]);
+});
+
+test("an `owners` key in access.json grants nothing and is reported", () => {
+  const p = file();
+  const logs: string[] = [];
+  writeFileSync(p, JSON.stringify({ ...DEFAULT_FILE, owners: [U1] }));
+  const a = new AccessPolicy(p, { owners: [OWNER], log: (m) => void logs.push(m) });
+  assert.equal(a.isOwner(U1), false);
+  assert.equal(a.can(U1, "import"), false);
+  assert.ok(logs.some((l) => /OWNER_USER_IDS/.test(l)));
 });

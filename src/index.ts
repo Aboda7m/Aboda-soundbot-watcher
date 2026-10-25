@@ -61,18 +61,28 @@ const queue: SoundQueue = new SoundQueue({
   log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
 });
 
-// Who may use the bot (whitelist/blacklist) and who holds which permission. Owners come from .env; the rest is
-// stored in access.json and changed with the owner-only `!access` command (or by editing the file).
+// Who may use the bot (whitelist/blacklist) and who holds which permission. Owners come from OWNER_USER_IDS in .env;
+// the rest is stored in access.json (created with open defaults when missing) and changed with the owner-only
+// `!access` command (or by editing the file). Legacy DASHBOARD_ALLOWED_USER_IDS are dashboard-only users, not owners.
 let access: AccessPolicy;
 try {
   access = new AccessPolicy(config.accessFile, {
     owners: config.ownerUserIds,
+    dashboardUsers: config.dashboardUserIds.filter((id) => !config.ownerUserIds.includes(id)),
     log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
   });
 } catch (err) {
   console.error(`Refusing to start: ${(err as Error).message}`);
   console.error("Fix or delete that file and start again.");
   process.exit(1);
+}
+
+{
+  const s = access.snapshot();
+  console.log(
+    `Access: bot ${s.whitelistEnabled ? "restricted to the whitelist" : "open to everyone"}, blacklist ${s.blacklistEnabled ? "on" : "off"}, ` +
+      `${s.owners.length} owner(s), ${Object.keys(s.grants).length} user(s) with permissions (${config.accessFile})`,
+  );
 }
 
 // Automatic intro / outro sounds
@@ -144,14 +154,15 @@ const core = {
   library,
   repo,
   queue,
-  canTarget: (guildId: string, channelId: string) =>
-    access.guildAllowed(guildId) && !!client.guilds.cache.get(guildId)?.channels.cache.get(channelId)?.isVoiceBased(),
+  // userId (optional) lets owners through whitelist/blacklist; it is only passed once the dashboard API supplies the signed-in user.
+  canTarget: (guildId: string, channelId: string, userId?: string) =>
+    access.guildAllowed(guildId, userId) && !!client.guilds.cache.get(guildId)?.channels.cache.get(channelId)?.isVoiceBased(),
 };
 
 // ---- PUBLIC listener: Discord OAuth2 + server-side sessions (the Cloudflare Tunnel origin) ----
 const sessions = new SessionStore({ maxAgeMs: config.sessionMaxMs });
 const authorizer = createAuthorizer({
-  userIds: config.ownerUserIds,
+  userIds: [...config.ownerUserIds, ...config.dashboardUserIds], // owners, plus legacy dashboard-only ids (they are not owners)
   extraAllow: (id) => access.can(id, "dashboard"), // users the owner granted `dashboard` to
   deny: (id) => access.isBlocked(id),              // blacklisted users, even if a server rule would let them in
 

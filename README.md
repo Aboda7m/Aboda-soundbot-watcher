@@ -122,7 +122,7 @@ section. The client id equals the bot's id: it is in the `Invite:` link the bot 
 |---|---|---|
 | `PUBLIC_BASE_URL` | **required** | the address people type, e.g. `https://dash.example.com` (no path, no trailing slash) |
 | `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` | **required** | see above |
-| `DASHBOARD_ALLOWED_USER_IDS` and/or `DASHBOARD_GUILD_ID` | **at least one required** | who may sign in; with neither, **nobody** can (fail closed) |
+| `OWNER_USER_IDS`, `DASHBOARD_ALLOWED_USER_IDS` and/or `DASHBOARD_GUILD_ID` | **at least one required** (or `!access grant <user> dashboard`) | who may sign in; with none, **nobody** can (fail closed). `DASHBOARD_ALLOWED_USER_IDS` users get the dashboard only, they are not owners |
 | `DASHBOARD_ROLE_IDS` | optional | with `DASHBOARD_GUILD_ID`: only members holding one of these roles |
 | `SESSION_MAX_HOURS` | optional, 12 | absolute session lifetime |
 | `SESSION_RECHECK_MINUTES` | optional, 10 | how often live sessions are re-authorized (0 = off) |
@@ -135,7 +135,8 @@ rewriting your file (PowerShell, from the project folder; edit the values afterw
     Add-Content .env "`nPUBLIC_BASE_URL=https://dash.example.com`nDISCORD_CLIENT_ID=`nDISCORD_CLIENT_SECRET=`nDASHBOARD_ALLOWED_USER_IDS="
 
 **Who may sign in.** After Discord proves who you are, the server (never the browser) decides: you are an **owner**
-(`OWNER_USER_IDS`, or the older `DASHBOARD_ALLOWED_USER_IDS`), or the owner gave you the `dashboard` permission (see
+(`OWNER_USER_IDS`), or you are listed in the legacy `DASHBOARD_ALLOWED_USER_IDS` (dashboard view and play only, never owner powers),
+or the owner gave you the `dashboard` permission (see
 [Access control](#access-control-who-may-use-the-bot-and-who-may-do-what)), or you are a member of `DASHBOARD_GUILD_ID` (the bot
 must be in that server; optionally holding one of `DASHBOARD_ROLE_IDS`). Guild members get the dashboard (view and play) only; import
 and logs always need a grant. A blocked user is refused whatever else applies. Client-supplied identities are never trusted.
@@ -177,9 +178,12 @@ Everything is decided by Discord **user and server ids** that you choose. Discor
 consulted, because everybody is an administrator of their own server. (Ids, not usernames: a username can be changed or imitated, an id cannot.)
 
 **Owners** are the ids in `OWNER_USER_IDS` in `.env` (comma separated). Owners can do everything, bypass the whitelist and blacklist, and cannot be
-blocked, so you cannot lock yourself out. Nobody becomes an owner from inside Discord.
+blocked, so you cannot lock yourself out. Nobody becomes an owner from inside Discord, and owners are never stored in `access.json`.
+`DASHBOARD_ALLOWED_USER_IDS` used to make its ids owners too; it no longer does. Those users keep the dashboard (view and play) but
+lose import, logs, `!access` and the whitelist/blacklist bypass until you move their id to `OWNER_USER_IDS` or `!access grant` them a permission.
 
-**Two switches, both off by default, so the bot is global like before.** Turn them on and off whenever you like; no restart:
+**Two switches, both off by default, so the bot is open to every user and server and nobody has to be listed.** Turn them on and off
+whenever you like; no restart. Filling or emptying a list never turns a switch on by itself:
 
 | Switch | When ON |
 |---|---|
@@ -210,8 +214,10 @@ change `!import` had no permission check at all and `!entrance @user` relied on 
 
 Typical use: `!access whitelist on`, then `!access allow server here` in each server you trust; later `!access whitelist off` to go global again.
 
-The settings live in `access.json` (`ACCESS_FILE` to move it). You can edit it by hand while the bot runs (a broken edit is reported and the
-previous rules stay in force; a broken file at startup stops the bot instead of guessing). Changes made by `!access` or by hand apply
+The settings live in `access.json` (`ACCESS_FILE` to move it). It is created automatically on first start with the open defaults
+(`whitelistEnabled` and `blacklistEnabled` false, empty lists, no grants) and never contains tokens, secrets or owner ids. You can edit it by
+hand while the bot runs. A broken edit is reported and the previous rules stay in force; `!access` changes are refused (and the broken file
+left untouched) until you fix it, so a typo never costs you your grants. A broken file at startup stops the bot instead of guessing. Changes made by `!access` or by hand apply
 immediately to commands and to dashboard requests. A user who loses `dashboard` or is blocked is signed out on their next request.
 
 ### Local (private) dashboard in a browser on your network
