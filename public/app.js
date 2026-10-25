@@ -18,6 +18,23 @@ const NS = "http://www.w3.org/2000/svg";
 
 const TABS = ["sounds", "favorites", "recent", "queue", "voice"];
 const SOUND_TABS = new Set(["sounds", "favorites", "recent"]);
+const TAB_ALIASES = { voices: "voice", sound: "sounds", favorite: "favorites", queues: "queue" };
+
+// Turns "#voice", "#Voices", "#/voices" or "voices" into a real tab name, or "" if it is not one.
+function normalizeTab(raw) {
+  let t = String(raw ?? "");
+  try {
+    t = decodeURIComponent(t);
+  } catch {
+    /* keep the raw text */
+  }
+  t = t.replace(/^[#/\s]+/, "").replace(/[/\s]+$/, "").toLowerCase();
+  t = TAB_ALIASES[t] ?? t;
+  return TABS.includes(t) ? t : "";
+}
+
+// Tab requested by the link: #voice first, then ?tab=voice.
+const tabFromUrl = () => normalizeTab(location.hash) || normalizeTab(new URLSearchParams(location.search).get("tab"));
 const MAX_RECENT = 30;
 const TAG_LIMIT = 12;
 
@@ -32,6 +49,7 @@ const K = {
   recent: "soundbot.recent.v1",
   target: "soundbot.target.v1",
   sort: "soundbot.sort.v1",
+  scale: "soundbot.uiscale.v1",
 };
 
 const mem = new Map();
@@ -1312,7 +1330,7 @@ function connect() {
 }
 
 function setTab(tab, { focus = false, scroll = false, hash = true } = {}) {
-  if (!TABS.includes(tab)) tab = "sounds";
+  tab = normalizeTab(tab) || "sounds";
   state.tab = tab;
 
   for (const t of TABS) {
@@ -1355,8 +1373,8 @@ $("tablist").addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("hashchange", () => {
-  const t = location.hash.slice(1);
-  if (TABS.includes(t) && t !== state.tab) setTab(t, { hash: false });
+  const t = normalizeTab(location.hash);
+  if (t && t !== state.tab) setTab(t, { hash: false });
 });
 
 $("search").addEventListener("input", (e) => {
@@ -1456,11 +1474,36 @@ document.addEventListener("visibilitychange", () => {
   refreshPlayback().catch(() => {});
 });
 
+/* ---------- text size (works the same on desktop, mobile and touch panels; no CSS zoom/transform) ---------- */
+
+const SCALE_MIN = 0.9;
+const SCALE_MAX = 2.2;
+const SCALE_STEP = 0.1;
+
+function applyScale(v, save = true) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return;
+  const scale = Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, n)) * 100) / 100;
+  document.documentElement.style.setProperty("--ui-scale", String(scale));
+  if (save) store.write(K.scale, scale);
+  $("textSmaller").disabled = scale <= SCALE_MIN;
+  $("textLarger").disabled = scale >= SCALE_MAX;
+}
+
+const scaleFromUrl = new URLSearchParams(location.search).get("scale"); // e.g. ?key=...&scale=1.6 for a fixed panel
+applyScale(scaleFromUrl ?? store.read(K.scale, 1.2), scaleFromUrl !== null);
+for (const [id, dir] of [["textSmaller", -1], ["textLarger", 1]]) {
+  $(id).addEventListener("click", () => {
+    const cur = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ui-scale")) || 1.2;
+    applyScale(cur + dir * SCALE_STEP);
+  });
+}
+
 installCustomSelect($("guild-select"));
 installCustomSelect($("channel-select"));
 installCustomSelect($("sort"));
 
-setTab(location.hash.slice(1), { hash: false });
+setTab(tabFromUrl(), { hash: false });
 renderStatus();
 renderTarget();
 renderVoice();
