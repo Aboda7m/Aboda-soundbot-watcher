@@ -1,40 +1,39 @@
+
 # Dependencies
 node_modules/
 
-# Secrets & Environment variables
+# Secrets and environment variables
 .env
 .env.*
 !.env.example
 
-# Local Database & Backups
+# Local database, access policy and backups
 db.json
 db.json.bak
+access.json
 *.json.bak
 
-# Portable yt-dlp binary (downloaded by `npm run ytdlp:install`; the manifest next to it IS tracked)
+# Portable yt-dlp binary
 tools/yt-dlp/bin/
 
-# Local Sounds Storage
+# Local sounds
 sounds/
 *.mp3
 *.wav
 *.opus
 
-# Logs & Debugging
+# Logs and debugging
 *.log
 npm-debug.log*
+voice-activity-logs.json
+voice-activity-logs.txt
+sound-play-logs.json
 
-# System & OS Files
+# System and OS files
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# IDE & Editor folders
+# IDE files
 .vscode/
 .idea/
-
-
-# Voice Activity Logs
-voice-activity-logs.json
-voice-activity-logs.txts
-sound-play-logs.json
