@@ -10,7 +10,7 @@ const targetId = "333333333333333";
 const guildAId = "444444444444444";
 const guildBId = "555555555555555";
 
-function harness(opts: { guildAAdmin?: boolean; guildBAdmin?: boolean } = {}) {
+function harness(opts: { guildAAdmin?: boolean; guildBAdmin?: boolean; botEntranceGrant?: boolean } = {}) {
   const writes: Array<{ userId: string; sound: string }> = [];
   const clears: string[] = [];
   const makeMember = (id: string, admin: boolean) => ({
@@ -40,6 +40,7 @@ function harness(opts: { guildAAdmin?: boolean; guildBAdmin?: boolean } = {}) {
   const guildB = makeGuild(guildBId, !!opts.guildBAdmin);
   const d: any = {
     client: { guilds: { cache: new Map([[guildAId, guildA], [guildBId, guildB]]) } },
+    canManageEntrances: () => !!opts.botEntranceGrant,
     library: { has: (name: string) => name === "sound-one", resolve: () => null },
     repo: {
       entrance: () => undefined,
@@ -92,4 +93,13 @@ test("personal entrance assignment still targets only the signed-in account", as
     h.res, new URL("http://local/api/entrance"), h.kit);
   assert.equal(h.res.status, 200);
   assert.deepEqual(h.writes, [{ userId: adminId, sound: "sound-one" }]);
+});
+
+
+test("bot-level entrance.manage grant can administer members in bot guilds without Discord Manage Server", async () => {
+  const h = harness({ botEntranceGrant: true });
+  await handleEntranceRoute(h.d, post({ guildId: guildBId, userId: targetId, sound: "sound-one" }) as any,
+    h.res, new URL("http://local/api/entrance/admin/assign"), h.kit);
+  assert.equal(h.res.status, 200);
+  assert.deepEqual(h.writes, [{ userId: targetId, sound: "sound-one" }]);
 });

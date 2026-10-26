@@ -23,6 +23,8 @@ export interface EntranceDeps {
   library: Pick<SoundLibrary, "has" | "resolve">;
   repo: Pick<SoundRepository, "entrance" | "setEntrance" | "clearEntrance" | "setGuildEntrance" | "clearGuildEntrance" | "hasGuildEntranceOverride">;
   client?: Client;
+  /** Bot-level grant; unlike Discord guild permissions, this capability intentionally applies to all bot guilds. */
+  canManageEntrances?: (userId: string) => boolean;
 }
 
 export interface EntranceKit {
@@ -40,10 +42,12 @@ const MIME: Record<string, string> = {
   ".flac": "audio/flac",
 };
 
-export async function resolveAdminGuild(client: Client, userId: string, guildId: string): Promise<Guild | null> {
+export async function resolveAdminGuild(
+  client: Client, userId: string, guildId: string, hasBotEntranceGrant = false,
+): Promise<Guild | null> {
   const guild = client.guilds.cache.get(guildId);
   if (!guild || !guild.available) return null;
-  if (guild.ownerId === userId) return guild;
+  if (hasBotEntranceGrant || guild.ownerId === userId) return guild;
   try {
     const member = await guild.members.fetch({ user: userId, force: true });
     return mayAdministerGuild(userId, guild.ownerId, {
@@ -55,8 +59,10 @@ export async function resolveAdminGuild(client: Client, userId: string, guildId:
   }
 }
 
-export async function canAdministerAnyGuild(client: Client, userId: string): Promise<boolean> {
-  for (const guild of client.guilds.cache.values()) if (await resolveAdminGuild(client, userId, guild.id)) return true;
+export async function canAdministerAnyGuild(
+  client: Client, userId: string, hasBotEntranceGrant = false,
+): Promise<boolean> {
+  for (const guild of client.guilds.cache.values()) if (await resolveAdminGuild(client, userId, guild.id, hasBotEntranceGrant)) return true;
   return false;
 }
 
@@ -71,10 +77,12 @@ async function handleAdminRoute(
   if (!known) return false;
   if (!d.client) { json(res, 503, { error: "Entrance administration is unavailable" }); return true; }
 
+  const hasBotEntranceGrant = d.canManageEntrances?.(kit.user.id) === true;
+
   if (isGet && pathname === "/api/entrance/admin/guilds") {
     const guilds = [];
     for (const guild of d.client.guilds.cache.values()) {
-      if (await resolveAdminGuild(d.client, kit.user.id, guild.id)) guilds.push({ id: guild.id, name: guild.name });
+      if (await resolveAdminGuild(d.client, kit.user.id, guild.id, hasBotEntranceGrant)) guilds.push({ id: guild.id, name: guild.name });
     }
     if (!guilds.length) { json(res, 403, { error: "You do not administer any server where the bot is present" }); return true; }
     json(res, 200, { guilds });
@@ -83,7 +91,7 @@ async function handleAdminRoute(
 
   if (isGet) {
     const guildId = url.searchParams.get("guildId") ?? "";
-    const guild = await resolveAdminGuild(d.client, kit.user.id, guildId);
+    const guild = await resolveAdminGuild(d.client, kit.user.id, guildId, hasBotEntranceGrant);
     if (!guild) { json(res, 403, { error: "You cannot administer this server" }); return true; }
     try {
       // Listing all members requires the privileged Guild Members intent, enabled in createClient().
@@ -113,7 +121,7 @@ async function handleAdminRoute(
   if (typeof guildId !== "string" || !SNOWFLAKE.test(guildId) || typeof userId !== "string" || !SNOWFLAKE.test(userId)) {
     json(res, 400, { error: "guildId and userId must be Discord IDs" }); return true;
   }
-  const guild = await resolveAdminGuild(d.client, kit.user.id, guildId);
+  const guild = await resolveAdminGuild(d.client, kit.user.id, guildId, hasBotEntranceGrant);
   if (!guild) { json(res, 403, { error: "You cannot administer this server" }); return true; }
   let member: GuildMember;
   try { member = await guild.members.fetch({ user: userId, force: true }); }

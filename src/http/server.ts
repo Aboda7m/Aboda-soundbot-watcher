@@ -359,12 +359,12 @@ export function createPublicServer(d: PublicDeps): Server {
       if (d.accessPolicy && await handleAccessRoute({ access: d.accessPolicy, sessions: d.sessions, client: d.discordClient, can: d.can }, req, res, url, core)) return;
 
       // The entrance sound always belongs to the signed-in account of this session; no request can name another user.
-      if (await handleEntranceRoute({ ...d, client: d.discordClient }, req, res, url, core)) return;
+      if (await handleEntranceRoute({ ...d, client: d.discordClient, canManageEntrances: (userId) => d.can(userId, "entrance.manage") }, req, res, url, core)) return;
 
       if (isPost) return json(res, 404, { error: "Not found" });
 
       if (url.pathname === "/entrance-admin" || url.pathname === "/entrance-admin.js" || url.pathname === "/entrance-admin.css") {
-        if (!d.discordClient || !(await canAdministerAnyGuild(d.discordClient, uid))) {
+        if (!d.discordClient || !(await canAdministerAnyGuild(d.discordClient, uid, d.can(uid, "entrance.manage")))) {
           return text(res, 403, "Guild administration permission required");
         }
       }
