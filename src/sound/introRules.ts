@@ -14,7 +14,7 @@ export interface IntroPlan {
   channelId: string;
 }
 export interface IntroLookup {
-  entrance(userId: string): string | undefined;
+  entrance(userId: string, guildId?: string): string | undefined;
   exit(userId: string): string | undefined;
   hasSound(name: string): boolean;
 }
@@ -37,7 +37,7 @@ export function planIntros(move: VoiceMove, lookup: IntroLookup): IntroPlan[] {
       plans.push({ kind: "exit", sound, guildId: move.guildId, channelId: move.fromChannelId });
   }
   if (move.toChannelId) {
-    const sound = lookup.entrance(move.userId);
+    const sound = lookup.entrance(move.userId, move.guildId);
     if (sound && lookup.hasSound(sound))
       plans.push({ kind: "entrance", sound, guildId: move.guildId, channelId: move.toChannelId });
   }

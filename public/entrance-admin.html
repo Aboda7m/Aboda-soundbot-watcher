@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Entrance Sound Administration</title>
+  <link rel="stylesheet" href="/entrance-admin.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <h1>Entrance sound administration</h1>
+    <a class="back" href="/">Back to soundboard</a>
+  </header>
+  <main id="main" tabindex="-1">
+    <p id="banner" class="banner" role="alert" hidden></p>
+    <section class="card">
+      <label for="guild">Server you administer</label>
+      <select id="guild" disabled><option>Loading servers…</option></select>
+      <p id="status" class="hint" role="status">Loading administration access…</p>
+    </section>
+    <section>
+      <h2>Members and entrance sounds</h2>
+      <p class="hint">Assignments use the bot's existing per-Discord-user entrance-sound setting.</p>
+      <div id="members" class="list"></div>
+    </section>
+  </main>
+  <script src="/entrance-admin.js" defer></script>
+</body>
+</html>

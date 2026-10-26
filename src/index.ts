@@ -95,7 +95,7 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     // Same whitelist/blacklist as the text commands: no automatic sounds for servers or users the owner has not allowed.
     if (!access.canUseBot(move.guildId, move.userId)) return;
     for (const plan of planIntros(move, {
-      entrance: (id) => repo.entrance(id),
+      entrance: (id, guildId) => repo.entrance(id, guildId),
       exit: (id) => repo.exit(id),
       hasSound: (name) => library.has(name),
     })) {
@@ -246,6 +246,7 @@ const oauthReady = !!(config.publicBaseUrl && config.discordClientId && config.d
 const publicBase = config.publicBaseUrl || `http://localhost:${config.publicPort}`;
 const publicServer = createPublicServer({
   ...core,
+  discordClient: client,
   publicBaseUrl: publicBase,
   sessions,
   oauth: oauthReady

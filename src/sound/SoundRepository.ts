@@ -8,6 +8,8 @@ export interface SoundMeta {
 }
 interface Db {
   entrances: Record<string, string>;
+  /** Guild-specific overrides; an empty string explicitly suppresses the user's personal entrance sound in that guild. */
+  guildEntrances: Record<string, Record<string, string>>;
   exits: Record<string, string>;
   ignoreList: string[];
   sounds: SoundMeta[];
@@ -21,10 +23,14 @@ function validate(raw: unknown): Db {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("db.json root must be an object");
   const d = raw as Record<string, unknown>;
   d.entrances ??= {};
+  d.guildEntrances ??= {};
   d.exits ??= {};
   d.ignoreList ??= [];
   d.sounds ??= [];
   if (!isRecordOfStrings(d.entrances)) throw new Error("db.json: 'entrances' must map user id -> sound name");
+  if (typeof d.guildEntrances !== "object" || d.guildEntrances === null || Array.isArray(d.guildEntrances) ||
+      !Object.values(d.guildEntrances as Record<string, unknown>).every(isRecordOfStrings))
+    throw new Error("db.json: 'guildEntrances' must map guild id -> user id -> sound name");
   if (!isRecordOfStrings(d.exits)) throw new Error("db.json: 'exits' must map user id -> sound name");
   if (!Array.isArray(d.ignoreList)) throw new Error("db.json: 'ignoreList' must be an array");
   if (!Array.isArray(d.sounds)) throw new Error("db.json: 'sounds' must be an array");
@@ -45,7 +51,7 @@ function validate(raw: unknown): Db {
 export class SoundRepository {
   #path: string;
   #countPlays: boolean;
-  #data: Db = { entrances: {}, exits: {}, ignoreList: [], sounds: [] };
+  #data: Db = { entrances: {}, guildEntrances: {}, exits: {}, ignoreList: [], sounds: [] };
   #mtime = -1;
   #dirty = false;
   #timer: NodeJS.Timeout | null = null;
@@ -77,12 +83,40 @@ export class SoundRepository {
     }
   }
 
-  entrance(userId: string): string | undefined {
+  entrance(userId: string, guildId?: string): string | undefined {
     this.#reloadIfChanged();
+    if (guildId && Object.hasOwn(this.#data.guildEntrances[guildId] ?? {}, userId)) {
+      return this.#data.guildEntrances[guildId][userId] || undefined;
+    }
     return this.#data.entrances[userId] || undefined;
   }
 
-  /** Sets a user's entrance sound and saves immediately. Other db.json data is left untouched. */
+  hasGuildEntranceOverride(userId: string, guildId: string): boolean {
+    this.#reloadIfChanged();
+    return Object.hasOwn(this.#data.guildEntrances[guildId] ?? {}, userId);
+  }
+
+  /** Sets a guild-specific override, without changing the user's personal entrance sound. */
+  setGuildEntrance(guildId: string, userId: string, sound: string): void {
+    this.#reloadIfChanged();
+    this.#data.guildEntrances[guildId] ??= {};
+    this.#data.guildEntrances[guildId][userId] = sound;
+    this.#dirty = true;
+    this.flush();
+  }
+
+  /** Suppresses entrance sounds for this member in this guild, even if they have a personal sound. */
+  clearGuildEntrance(guildId: string, userId: string): boolean {
+    this.#reloadIfChanged();
+    this.#data.guildEntrances[guildId] ??= {};
+    if (this.#data.guildEntrances[guildId][userId] === "") return false;
+    this.#data.guildEntrances[guildId][userId] = "";
+    this.#dirty = true;
+    this.flush();
+    return true;
+  }
+
+  /** Sets a user's personal entrance sound and saves immediately. Other db.json data is left untouched. */
   setEntrance(userId: string, sound: string): void {
     this.#reloadIfChanged();
     this.#data.entrances[userId] = sound;

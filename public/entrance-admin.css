@@ -1,0 +1,25 @@
+* { box-sizing: border-box; }
+:root { color-scheme: dark; --bg:#111318; --surface:#1b1e25; --pad:#252a33; --line:#353b47; --text:#edf0f6; --muted:#aab2c0; --accent:#e6b95c; --radius:12px; }
+body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,sans-serif; }
+a { color:inherit; }
+.skip { position:absolute; left:-10000px; top:0; }
+.skip:focus { left:12px; top:12px; z-index:2; background:var(--surface); padding:8px; }
+.top { max-width:960px; margin:auto; padding:24px 16px 12px; display:flex; justify-content:space-between; align-items:center; gap:16px; }
+h1 { font-size:clamp(20px,4vw,28px); margin:0; }
+.back { color:var(--accent); white-space:nowrap; }
+main { max-width:960px; margin:auto; padding:8px 16px 40px; display:grid; gap:20px; }
+h2 { font-size:18px; margin:0 0 12px; }
+.card { display:grid; gap:8px; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; }
+select { min-width:0; width:100%; padding:10px 12px; background:var(--pad); color:var(--text); border:1px solid var(--line); border-radius:8px; }
+.hint { color:var(--muted); font-size:13px; margin:4px 0; }
+.banner { background:#3a1d22; border:1px solid #6b2f38; color:#ffd6d6; border-radius:var(--radius); padding:10px 14px; }
+.list { display:grid; gap:8px; }
+.member { display:grid; grid-template-columns:minmax(150px,1fr) minmax(180px,1.2fr) auto; gap:10px; align-items:center; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:10px; }
+.name { min-width:0; overflow-wrap:anywhere; }
+.assignment { color:var(--muted); font-size:12px; }
+.actions { display:flex; gap:8px; }
+button { min-height:38px; border:1px solid var(--line); border-radius:8px; background:var(--pad); color:var(--text); padding:6px 12px; cursor:pointer; }
+button.primary { background:var(--accent); color:#1b1405; border-color:var(--accent); font-weight:600; }
+button:disabled, select:disabled { opacity:.55; cursor:not-allowed; }
+.empty { color:var(--muted); background:var(--surface); border:1px dashed var(--line); border-radius:8px; padding:18px; }
+@media(max-width:640px) { .top { align-items:flex-start; flex-direction:column; } .member { grid-template-columns:1fr; } .actions button { flex:1; } }

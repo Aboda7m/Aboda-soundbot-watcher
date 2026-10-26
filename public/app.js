@@ -1527,3 +1527,17 @@ fetch("/api/me", { cache: "no-store" })
     }
   })
   .catch(() => {});
+
+// Show guild-scoped entrance administration only when the server confirms current permissions.
+(async function loadEntranceAdminLink() {
+  const link = document.getElementById("entranceAdminButton");
+  if (!link) return;
+  try {
+    const res = await fetch("/api/entrance/admin/guilds", { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    link.hidden = !Array.isArray(data.guilds) || data.guilds.length === 0;
+  } catch {
+    link.hidden = true;
+  }
+})();

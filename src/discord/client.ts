@@ -2,11 +2,12 @@ import { Client, GatewayIntentBits } from "discord.js";
 import type { VoiceMove } from "../sound/introRules.ts";
 import type { VoiceState } from "discord.js";
 
-/** One shared client. MessageContent is a PRIVILEGED intent (needed for the !sound text command): enable it in the Developer Portal. */
+/** One shared client. MessageContent and GuildMembers are PRIVILEGED intents (needed for member enumeration and the !sound text command): enable it in the Developer Portal. */
 export function createClient(): Client {
   return new Client({
     intents: [
       GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildVoiceStates,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,

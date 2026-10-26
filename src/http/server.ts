@@ -8,7 +8,8 @@ import type { ImportService } from "../import/ImportService.ts";
 import { handleImportRoute } from "./importRoutes.ts";
 import { handleLogRoute, type LogFiles } from "./logRoutes.ts";
 import { handleCoreApi, type CoreDeps } from "./coreApi.ts";
-import { handleEntranceRoute } from "./entranceRoutes.ts";
+import { canAdministerAnyGuild, handleEntranceRoute } from "./entranceRoutes.ts";
+import type { Client } from "discord.js";
 import { SECURITY_HEADERS, contentTypeAllowed, json, readBody, safeEqual } from "./common.ts";
 import { parseCookies, serializeCookie } from "./auth/cookies.ts";
 import type { DiscordOAuth } from "./auth/discordOAuth.ts";
@@ -43,6 +44,8 @@ export interface PublicDeps extends CoreDeps {
   importer?: ImportService;
   /** Optional log viewer (page at /logs + /api/logs). Left out = those routes do not exist. */
   logs?: LogFiles;
+  /** Discord client used for live guild-scoped entrance administration. */
+  discordClient?: Client;
 }
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
@@ -61,6 +64,9 @@ const STATIC: Record<string, StaticEntry> = {
   },
   "/entrance.js": { file: "entrance.js", type: "text/javascript; charset=utf-8" },
   "/entrance.css": { file: "entrance.css", type: "text/css; charset=utf-8" },
+  "/entrance-admin": { file: "entrance-admin.html", type: "text/html; charset=utf-8", csp: "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'" },
+  "/entrance-admin.js": { file: "entrance-admin.js", type: "text/javascript; charset=utf-8" },
+  "/entrance-admin.css": { file: "entrance-admin.css", type: "text/css; charset=utf-8" },
 };
 
 // Served only when an importer is configured. The page plays its own preview audio, hence media-src.
@@ -343,9 +349,15 @@ export function createPublicServer(d: PublicDeps): Server {
       if (await handleCoreApi(d, req, res, url, core)) return;
 
       // The entrance sound always belongs to the signed-in account of this session; no request can name another user.
-      if (await handleEntranceRoute(d, req, res, url, core)) return;
+      if (await handleEntranceRoute({ ...d, client: d.discordClient }, req, res, url, core)) return;
 
       if (isPost) return json(res, 404, { error: "Not found" });
+
+      if (url.pathname === "/entrance-admin" || url.pathname === "/entrance-admin.js" || url.pathname === "/entrance-admin.css") {
+        if (!d.discordClient || !(await canAdministerAnyGuild(d.discordClient, uid))) {
+          return text(res, 403, "Guild administration permission required");
+        }
+      }
 
       const file = staticFiles[url.pathname];
       if (file) {
