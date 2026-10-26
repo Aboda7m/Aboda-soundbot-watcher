@@ -12,6 +12,11 @@ export interface AuthorizeOptions {
   fetchMember(guildId: string, userId: string): Promise<{ roles: string[] } | null>;
   /** Extra yes (e.g. the owner-managed policy grants dashboard access). */
   extraAllow?(userId: string): boolean;
+  /**
+   * True if the user shares at least one server with the bot. Throw when that cannot be determined
+   * (Discord unreachable, bot not connected yet): that is "unknown", not "no".
+   */
+  inBotServer?(userId: string): Promise<boolean>;
   /** A yes/no that beats everything else: a blocked user is refused even if a server or id rule would allow them. */
   deny?(userId: string): boolean;
   log?: (msg: string, err?: unknown) => void;
@@ -30,8 +35,27 @@ export type Authorizer = ((userId: string) => Promise<boolean>) & {
 export function createAuthorizer(o: AuthorizeOptions): Authorizer {
   const decide = async (userId: string): Promise<"allow" | "deny" | "unknown"> => {
     if (o.deny?.(userId)) return "deny";
-    // Public dashboard sign-in is open to all non-blocked Discord accounts.
-    return "allow";
+    if (o.userIds.includes(userId)) return "allow";
+    if (o.extraAllow?.(userId)) return "allow";
+    let unknown = false;
+    if (o.inBotServer) {
+      try {
+        if (await o.inBotServer(userId)) return "allow";
+      } catch (err) {
+        o.log?.(`dashboard server-membership lookup failed for ${userId}`, err);
+        unknown = true;
+      }
+    }
+    if (o.guildId) {
+      try {
+        const member = await o.fetchMember(o.guildId, userId);
+        if (member && (o.roleIds.length === 0 || o.roleIds.some((r) => member.roles.includes(r)))) return "allow";
+      } catch (err) {
+        o.log?.(`dashboard authorization lookup failed for ${userId}`, err);
+        unknown = true;
+      }
+    }
+    return unknown ? "unknown" : "deny";
   };
   const signIn = async (userId: string) => (await decide(userId)) === "allow";
   const recheck = async (userId: string) => {

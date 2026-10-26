@@ -40,6 +40,19 @@ test("authorize: extraAllow adds users, deny beats every allow rule (id list, ex
   assert.equal(await a.recheck("300000000000000001"), false);
 });
 
+test("authorize: anyone sharing a server with the bot may sign in; blocked users and strangers may not; lookup errors fail closed", async () => {
+  const shared = new Set(["300000000000000001"]);
+  const a = createAuthorizer({ userIds: [], roleIds: [], fetchMember, inBotServer: async (id) => shared.has(id), deny: (id) => id === "300000000000000002" });
+  assert.equal(await a("300000000000000001"), true);
+  assert.equal(await a("300000000000000009"), false, "shares no server with the bot");
+  shared.add("300000000000000002");
+  assert.equal(await a("300000000000000002"), false, "blocked beats shared-server membership");
+  const down = createAuthorizer({ userIds: [], roleIds: [], fetchMember, inBotServer: async () => { throw new Error("discord unreachable"); } });
+  assert.equal(await down("300000000000000001"), false);
+  assert.equal(await down.recheck("300000000000000001"), null, "an outage keeps live sessions");
+  assert.equal(await a.recheck("300000000000000009"), false, "left every shared server: revoked");
+});
+
 test("authorize.recheck: definite answers revoke or keep, a lookup error keeps (null)", async () => {
   const a = createAuthorizer({ userIds: ["999999999999999999"], guildId: "g", roleIds: ["r1"], fetchMember });
   assert.equal(await a.recheck("999999999999999999"), true);

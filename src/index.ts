@@ -165,6 +165,29 @@ const authorizer = createAuthorizer({
   userIds: [...config.ownerUserIds, ...config.dashboardUserIds], // owners, plus legacy dashboard-only ids (they are not owners)
   extraAllow: (id) => access.can(id, "dashboard"), // users the owner granted `dashboard` to
   deny: (id) => access.isBlocked(id),              // blacklisted users, even if a server rule would let them in
+  // Anyone who shares a (not blocked / not un-whitelisted) server with the bot may sign in. Looked up live, nothing to maintain.
+  inBotServer: async (userId) => {
+    const guilds = [...client.guilds.cache.values()].filter((g) => access.guildAllowed(g.id));
+    if (client.guilds.cache.size === 0) throw new Error("bot is not connected to any server yet");
+    if (guilds.some((g) => g.members.cache.has(userId))) return true;
+    let failed: unknown;
+    const found = await Promise.all(
+      guilds.map(async (g) => {
+        try {
+          await g.members.fetch(userId); // single-member REST lookup: needs no privileged intent
+          return true;
+        } catch (err) {
+          const code = (err as { code?: number }).code;
+          if (code === 10007 || code === 10013) return false; // not a member of this server
+          failed = err;
+          return false;
+        }
+      }),
+    );
+    if (found.some(Boolean)) return true;
+    if (failed) throw failed; // could not check every server: unknown, not "no"
+    return false;
+  },
 
   guildId: config.dashboardGuildId || undefined,
   roleIds: config.dashboardRoleIds,
@@ -197,14 +220,12 @@ const publicServer = createPublicServer({
       })
     : undefined,
   authorize: authorizer,
-  // The server-side check made on every request. A member admitted by the DASHBOARD_GUILD_ID / DASHBOARD_ROLE_IDS rule has no
-  // `dashboard` grant, but holds a live session that the periodic recheck keeps honest; a blocked user never passes.
+  // The server-side check made on every request. A user admitted because they share a server with the bot (or via the
+  // DASHBOARD_GUILD_ID rule) has no `dashboard` grant, but holds a live session that the periodic recheck keeps honest;
+  // a blocked user never passes.
   can: (userId: string, capability: Capability) =>
     access.can(userId, capability) ||
-    (capability === "dashboard" &&
-      !!config.dashboardGuildId &&
-      !access.isBlocked(userId) &&
-      sessions.all().some((s) => s.user.id === userId)),
+    (capability === "dashboard" && !access.isBlocked(userId) && sessions.all().some((s) => s.user.id === userId)),
   recheck: authorizer.recheck,
   recheckMs: config.sessionRecheckMs,
   importer,

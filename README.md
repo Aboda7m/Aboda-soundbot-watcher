@@ -122,7 +122,7 @@ section. The client id equals the bot's id: it is in the `Invite:` link the bot 
 |---|---|---|
 | `PUBLIC_BASE_URL` | **required** | the address people type, e.g. `https://dash.example.com` (no path, no trailing slash) |
 | `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` | **required** | see above |
-| `OWNER_USER_IDS`, `DASHBOARD_ALLOWED_USER_IDS` and/or `DASHBOARD_GUILD_ID` | **at least one required** (or `!access grant <user> dashboard`) | who may sign in; with none, **nobody** can (fail closed). `DASHBOARD_ALLOWED_USER_IDS` users get the dashboard only, they are not owners |
+| `OWNER_USER_IDS`, `DASHBOARD_ALLOWED_USER_IDS` and/or `DASHBOARD_GUILD_ID` | optional | extra ways to sign in. Anyone who shares a server with the bot (checked live, minus blacklisted users and servers the access policy refuses) can always sign in. `DASHBOARD_ALLOWED_USER_IDS` users get the dashboard only, they are not owners |
 | `DASHBOARD_ROLE_IDS` | optional | with `DASHBOARD_GUILD_ID`: only members holding one of these roles |
 | `SESSION_MAX_HOURS` | optional, 720 (30 days) | absolute lifetime of a Discord sign-in and of its cookie; it is not extended by use |
 | `SESSION_FILE` | optional, `./sessions.json` | where sign-ins are kept so they survive a bot restart (hashes only). Keep it private and out of git |

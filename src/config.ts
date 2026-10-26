@@ -188,9 +188,6 @@ export function checkNetworkConfig(c: Config): NetworkCheck {
   if (c.ownerUserIds.length === 0) {
     warnings.push("OWNER_USER_IDS is not set: nobody can use the !access command or has full administrative access, and only users granted permissions can import sounds or read logs.");
   }
-  if (c.ownerUserIds.length === 0 && c.dashboardUserIds.length === 0 && !c.dashboardGuildId) {
-    warnings.push("No OWNER_USER_IDS, DASHBOARD_ALLOWED_USER_IDS or DASHBOARD_GUILD_ID set: nobody is authorized to sign in to the public dashboard (the owner can also grant the dashboard permission with !access grant).");
-  }
   if (c.dashboardUserIds.some((id) => !c.ownerUserIds.includes(id))) {
     warnings.push("DASHBOARD_ALLOWED_USER_IDS users are dashboard-only (sign in, view, play). They are no longer treated as owners; put an id in OWNER_USER_IDS to give full control.");
   }
