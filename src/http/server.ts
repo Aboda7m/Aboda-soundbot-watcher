@@ -4,6 +4,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Capability } from "../access/AccessPolicy.ts";
+import type { AccessPolicy } from "../access/AccessPolicy.ts";
+import { handleAccessRoute } from "./accessRoutes.ts";
 import type { ImportService } from "../import/ImportService.ts";
 import { handleImportRoute } from "./importRoutes.ts";
 import { handleLogRoute, type LogFiles } from "./logRoutes.ts";
@@ -46,6 +48,8 @@ export interface PublicDeps extends CoreDeps {
   logs?: LogFiles;
   /** Discord client used for live guild-scoped entrance administration. */
   discordClient?: Client;
+  /** Persistent bot-user grants, managed only by owners or explicitly delegated access managers. */
+  accessPolicy?: AccessPolicy;
 }
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
@@ -67,6 +71,9 @@ const STATIC: Record<string, StaticEntry> = {
   "/entrance-admin": { file: "entrance-admin.html", type: "text/html; charset=utf-8", csp: "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'" },
   "/entrance-admin.js": { file: "entrance-admin.js", type: "text/javascript; charset=utf-8" },
   "/entrance-admin.css": { file: "entrance-admin.css", type: "text/css; charset=utf-8" },
+  "/user-management": { file: "user-management.html", type: "text/html; charset=utf-8", csp: "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'" },
+  "/user-management.js": { file: "user-management.js", type: "text/javascript; charset=utf-8" },
+  "/user-management.css": { file: "user-management.css", type: "text/css; charset=utf-8" },
 };
 
 // Served only when an importer is configured. The page plays its own preview audio, hence media-src.
@@ -96,12 +103,13 @@ const PUBLIC_ASSETS: Record<string, StaticEntry> = {
   "/login.css": { file: "login.css", type: "text/css; charset=utf-8" },
 };
 
-const PAGES = new Set(["/", "/entrance", "/import", "/logs"]);
+const PAGES = new Set(["/", "/entrance", "/import", "/logs", "/user-management"]);
 
 /** Which owner-granted permission a route needs, beyond being allowed onto the dashboard at all. */
 function requiredCapability(path: string): Capability | null {
   if (path === "/import" || path === "/import.js" || path === "/import.css" || path.startsWith("/api/import/")) return "import";
   if (path === "/logs" || path === "/logs.js" || path === "/logs.css" || path.startsWith("/api/logs")) return "logs";
+  if (["/user-management", "/user-management.js", "/user-management.css", "/api/access/users", "/api/access/users/update"].includes(path)) return "access.manage";
   return null;
 }
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -320,7 +328,7 @@ export function createPublicServer(d: PublicDeps): Server {
       if (!isPost && url.pathname === "/api/me") {
         return json(res, 200, {
           user: { id: uid, username: session.user.username },
-          can: { import: d.can(uid, "import"), logs: d.can(uid, "logs") },
+          can: { import: d.can(uid, "import"), logs: d.can(uid, "logs"), manageAccess: d.can(uid, "access.manage") },
         });
       }
 
@@ -347,6 +355,8 @@ export function createPublicServer(d: PublicDeps): Server {
       if (d.logs && (await handleLogRoute(d.logs, req, res, url, { json, allowedGuildIds: await d.accessibleGuildIds?.(uid) ?? [] }))) return;
 
       if (await handleCoreApi(d, req, res, url, core)) return;
+
+      if (d.accessPolicy && await handleAccessRoute({ access: d.accessPolicy, sessions: d.sessions, client: d.discordClient, can: d.can }, req, res, url, core)) return;
 
       // The entrance sound always belongs to the signed-in account of this session; no request can name another user.
       if (await handleEntranceRoute({ ...d, client: d.discordClient }, req, res, url, core)) return;

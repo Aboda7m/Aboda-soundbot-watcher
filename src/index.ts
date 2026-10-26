@@ -247,6 +247,7 @@ const publicBase = config.publicBaseUrl || `http://localhost:${config.publicPort
 const publicServer = createPublicServer({
   ...core,
   discordClient: client,
+  accessPolicy: access,
   publicBaseUrl: publicBase,
   sessions,
   oauth: oauthReady
