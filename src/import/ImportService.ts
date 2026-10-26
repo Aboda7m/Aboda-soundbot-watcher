@@ -94,6 +94,7 @@ interface Probe {
 
 interface Staged {
   id: string;
+  ownerId: string | null;
   srcPath: string;
   probe: Probe;
   outPath: string;
@@ -253,7 +254,7 @@ export class ImportService {
     this.#toolsOk = true;
   }
 
-  async stage(body: Readable, rawFileName: string, declaredLength: number | null): Promise<StagedInfo> {
+  async stage(body: Readable, rawFileName: string, declaredLength: number | null, ownerId?: string): Promise<StagedInfo> {
     this.#sweep();
     const fileName = cleanUploadName(rawFileName);
     await this.#ensureTools();
@@ -278,7 +279,7 @@ export class ImportService {
         if (!trim.ok) throw new ImportError(422, trim.error);
         const r = await this.#render(id, srcPath, probe, trim.plan, 1);
         this.#staged.set(id, {
-          id, srcPath, probe, outPath: r.path, ext: r.result.extension, mime: MIME[r.result.extension] ?? "application/octet-stream",
+          id, ownerId: ownerId ?? null, srcPath, probe, outPath: r.path, ext: r.result.extension, mime: MIME[r.result.extension] ?? "application/octet-stream",
           sizeBytes: r.result.sizeBytes, version: 1, touchedAt: Date.now(), busy: false, saving: false,
         });
         const suggested = suggestName(fileName);
@@ -306,7 +307,7 @@ export class ImportService {
     }
   }
 
-  async importYouTube(urlString: string): Promise<StagedInfo> {
+  async importYouTube(urlString: string, ownerId?: string): Promise<StagedInfo> {
     this.#sweep();
     await this.#ensureTools();
     const validatedUrl = validateYouTubeUrl(urlString);
@@ -360,7 +361,7 @@ export class ImportService {
         if (!trim.ok) throw new ImportError(422, trim.error);
         const r = await this.#render(id, srcPath, probe, trim.plan, 1);
         this.#staged.set(id, {
-          id, srcPath, probe, outPath: r.path, ext: r.result.extension, mime: MIME[r.result.extension] ?? "application/octet-stream",
+          id, ownerId: ownerId ?? null, srcPath, probe, outPath: r.path, ext: r.result.extension, mime: MIME[r.result.extension] ?? "application/octet-stream",
           sizeBytes: r.result.sizeBytes, version: 1, touchedAt: Date.now(), busy: false, saving: false,
         });
         
@@ -391,8 +392,8 @@ export class ImportService {
     }
   }
 
-  async process(id: string, rawRequest: unknown): Promise<RenderResult> {
-    const s = this.#get(id);
+  async process(id: string, rawRequest: unknown, ownerId?: string): Promise<RenderResult> {
+    const s = this.#get(id, ownerId);
     if (s.saving || s.busy) throw new ImportError(409, "This import is busy. Try again in a moment.");
     s.touchedAt = Date.now();
     return await this.#exclusive(async () => {
@@ -421,13 +422,13 @@ export class ImportService {
     });
   }
 
-  preview(id: string): { path: string; mime: string; sizeBytes: number } | null {
+  preview(id: string, ownerId?: string): { path: string; mime: string; sizeBytes: number } | null {
     const s = STAGED_ID.test(id) ? this.#staged.get(id) : undefined;
-    return s ? { path: s.outPath, mime: s.mime, sizeBytes: s.sizeBytes } : null;
+    return s && (ownerId === undefined || s.ownerId === ownerId) ? { path: s.outPath, mime: s.mime, sizeBytes: s.sizeBytes } : null;
   }
 
-  async save(id: string, rawName: unknown): Promise<{ name: string; file: string }> {
-    const s = this.#get(id);
+  async save(id: string, rawName: unknown, ownerId?: string): Promise<{ name: string; file: string }> {
+    const s = this.#get(id, ownerId);
     const checked = checkName(rawName);
     if (!checked.ok) throw new ImportError(400, checked.error);
     if (s.saving || s.busy) throw new ImportError(409, "This import is busy. Try again in a moment.");
@@ -472,9 +473,9 @@ export class ImportService {
     }
   }
 
-  discard(id: string): boolean {
+  discard(id: string, ownerId?: string): boolean {
     const s = STAGED_ID.test(id) ? this.#staged.get(id) : undefined;
-    if (!s || s.saving || s.busy) return false;
+    if (!s || (ownerId !== undefined && s.ownerId !== ownerId) || s.saving || s.busy) return false;
     this.#staged.delete(id);
     this.#dispose(s);
     return true;
@@ -490,9 +491,11 @@ export class ImportService {
     return { defaultSec: this.#o.defaultTrimSec, maxOutputSec: this.#o.maxOutputSec };
   }
 
-  #get(id: string): Staged {
+  #get(id: string, ownerId?: string): Staged {
     const s = STAGED_ID.test(id) ? this.#staged.get(id) : undefined;
-    if (!s) throw new ImportError(404, "That import expired or doesn't exist. Upload the file again.");
+    if (!s || (ownerId !== undefined && s.ownerId !== ownerId)) {
+      throw new ImportError(404, "That import expired or doesn't exist. Upload the file again.");
+    }
     return s;
   }
 

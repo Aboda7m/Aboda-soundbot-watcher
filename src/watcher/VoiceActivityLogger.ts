@@ -8,6 +8,7 @@ interface VoiceLogRecord {
   timestamp: string;
   action: 'JOIN' | 'DISCONNECT' | 'MOVE';
   userId: string;
+  guildId: string;
   username: string;
   guildName: string;
   channelName: string | null;
@@ -39,6 +40,7 @@ export function trackVoiceActivity(oldState: VoiceState, newState: VoiceState) {
     timestamp: new Date().toISOString(),
     action,
     userId,
+    guildId: newState.guild.id || oldState.guild.id,
     username,
     guildName,
     channelName: newState.channel?.name || null,

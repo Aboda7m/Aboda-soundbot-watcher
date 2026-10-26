@@ -16,6 +16,8 @@ export interface CoreDeps {
   queue: SoundQueue;
   /** true if the guild/channel exists and is a voice channel the bot can see */
   canTarget(guildId: string, channelId: string, userId?: string): boolean;
+  /** Guilds the authenticated dashboard user currently belongs to and may access. Omit for the local key listener. */
+  accessibleGuildIds?(userId: string): Promise<readonly string[]>;
 }
 
 export interface CoreKit {
@@ -64,17 +66,19 @@ export async function handleCoreApi(
         "X-Accel-Buffering": "no",
       });
       kit.onStream?.(res);
-      d.watcher.addClient(res);
+      const getAllowed = kit.user && d.accessibleGuildIds ? () => d.accessibleGuildIds!(kit.user!.id) : undefined;
+      void d.watcher.addClient(res, getAllowed).catch(() => res.end());
       return true;
 
     case "/api/voice":
       res
         .writeHead(200, { ...SECURITY_HEADERS, "Content-Type": "application/json" })
-        .end(d.watcher.payloadJson());
+        .end(d.watcher.payloadJson(kit.user && d.accessibleGuildIds ? await d.accessibleGuildIds(kit.user.id) : undefined));
       return true;
 
     case "/api/status":
-      json(res, 200, { playback: d.queue.status() });
+      const allowed = kit.user && d.accessibleGuildIds ? new Set(await d.accessibleGuildIds(kit.user.id)) : null;
+      json(res, 200, { playback: d.queue.status().filter((g) => !allowed || allowed.has(g.guildId)) });
       return true;
 
     case "/api/sounds": {
@@ -110,6 +114,15 @@ async function play(d: CoreDeps, req: IncomingMessage, res: ServerResponse, kit:
     return json(res, 400, { error: "guildId/channelId are not valid ids" });
   }
   if (!d.library.has(sound)) return json(res, 404, { error: "Unknown sound" });
+  if (kit.user && d.accessibleGuildIds) {
+    let allowed: readonly string[];
+    try {
+      allowed = await d.accessibleGuildIds(kit.user.id);
+    } catch {
+      return json(res, 503, { error: "Could not verify guild access" });
+    }
+    if (!allowed.includes(guildId)) return json(res, 404, { error: "Unknown guild or voice channel" });
+  }
   if (!d.canTarget(guildId, channelId, kit.user?.id)) return json(res, 404, { error: "Unknown guild or voice channel" });
 
   const result = d.queue.enqueue({
@@ -144,6 +157,16 @@ async function queueControl(
   const { guildId, id } = body ?? {};
   if (typeof guildId !== "string" || !SNOWFLAKE.test(guildId)) {
     return json(res, 400, { error: "guildId must be a valid id" });
+  }
+
+  if (kit.user && d.accessibleGuildIds) {
+    let allowed: readonly string[];
+    try {
+      allowed = await d.accessibleGuildIds(kit.user.id);
+    } catch {
+      return json(res, 503, { ok: false, error: "Could not verify guild access" });
+    }
+    if (!allowed.includes(guildId)) return json(res, 404, { ok: false, error: "Unknown guild" });
   }
 
   switch (action) {

@@ -9,6 +9,7 @@ export interface RouteKit {
   guard(req: IncomingMessage, res: ServerResponse, contentType: string): boolean;
   readBody(req: IncomingMessage): Promise<string>;
   headers: Record<string, string>;
+  userId: string;
 }
 
 const PREVIEW = /^\/api\/import\/preview\/([0-9a-f-]{36})$/;
@@ -75,7 +76,7 @@ export async function handleImportRoute(
     const len = req.headers["content-length"];
     const declared = typeof len === "string" && /^\d+$/.test(len) ? Number(len) : null;
     try {
-      kit.json(res, 201, { ok: true, ...(await importer.stage(req, fileName, declared)) });
+      kit.json(res, 201, { ok: true, ...(await importer.stage(req, fileName, declared, kit.userId)) });
     } catch (err) {
       fail(err);
     }
@@ -90,7 +91,7 @@ export async function handleImportRoute(
       return true;
     }
     try {
-      kit.json(res, 201, { ok: true, ...(await importer.importYouTube(body.url)) });
+      kit.json(res, 201, { ok: true, ...(await importer.importYouTube(body.url, kit.userId)) });
     } catch (err) {
       fail(err);
     }
@@ -105,7 +106,7 @@ export async function handleImportRoute(
       return true;
     }
     try {
-      kit.json(res, 201, { ok: true, ...(await importer.save(body.id, body.name)) });
+      kit.json(res, 201, { ok: true, ...(await importer.save(body.id, body.name, kit.userId)) });
     } catch (err) {
       fail(err);
     }
@@ -120,7 +121,7 @@ export async function handleImportRoute(
       return true;
     }
     try {
-      kit.json(res, 200, { ok: true, result: await importer.process(body.id, body) });
+      kit.json(res, 200, { ok: true, result: await importer.process(body.id, body, kit.userId) });
     } catch (err) {
       fail(err);
     }
@@ -134,7 +135,7 @@ export async function handleImportRoute(
       kit.json(res, 400, { ok: false, error: "Body must be JSON with id." });
       return true;
     }
-    kit.json(res, 200, { ok: true, discarded: importer.discard(body.id) });
+    kit.json(res, 200, { ok: true, discarded: importer.discard(body.id, kit.userId) });
     return true;
   }
 
@@ -143,7 +144,7 @@ export async function handleImportRoute(
 
 /** Streams a staged result to the <audio> player. Supports a single byte range so seeking works. */
 async function sendPreview(importer: ImportService, id: string, req: IncomingMessage, res: ServerResponse, kit: RouteKit) {
-  const p = importer.preview(id);
+  const p = importer.preview(id, kit.userId);
   if (!p) return kit.json(res, 404, { error: "Preview not found or expired" });
 
   let start = 0;

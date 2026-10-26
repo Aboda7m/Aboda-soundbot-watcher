@@ -26,11 +26,12 @@ export interface Snapshot {
   guilds: GuildInfo[];
 }
 
-export function buildSnapshot(client: Client, hideBots: boolean): Snapshot {
+export function buildSnapshot(client: Client, hideBots: boolean, allowedGuildIds?: ReadonlySet<string>): Snapshot {
   const guilds: GuildInfo[] = [];
   let total = 0;
 
   for (const guild of client.guilds.cache.values()) {
+    if (allowedGuildIds && !allowedGuildIds.has(guild.id)) continue;
     if (!guild.available) continue;
 
     const channels = new Map<string, { pos: number; info: ChannelInfo }>();

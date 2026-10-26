@@ -149,11 +149,47 @@ try {
 const logError = (msg: string, err?: unknown) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? ""));
 
 // What both listeners serve. The listeners differ only in how they authenticate.
+const guildAccessCache = new Map<string, { expiresAt: number; guildIds: string[] }>();
+const GUILD_ACCESS_CACHE_MS = 30_000;
+// Invalidate a cached membership decision immediately when Discord delivers a membership event.
+client.on(Events.GuildMemberAdd, (member) => guildAccessCache.delete(member.id));
+client.on(Events.GuildMemberRemove, (member) => guildAccessCache.delete(member.id));
+
+/**
+ * Resolve the guilds this dashboard user can actually access. Membership is checked against the bot's
+ * current guilds, while the existing whitelist/blacklist policy remains an additional restriction.
+ * A short cache avoids REST lookups on every SSE event; failed lookups never grant access.
+ */
+async function accessibleGuildIds(userId: string): Promise<readonly string[]> {
+  if (access.isBlocked(userId)) return [];
+  const cached = guildAccessCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return cached.guildIds.filter((id) => client.guilds.cache.has(id) && access.guildAllowed(id, userId));
+
+  const guilds = [...client.guilds.cache.values()].filter((g) => g.available && access.guildAllowed(g.id, userId));
+  const ids = await Promise.all(guilds.map(async (guild) => {
+    if (guild.members.cache.has(userId)) return guild.id;
+    try {
+      await guild.members.fetch(userId);
+      return guild.id;
+    } catch (err) {
+      const code = (err as { code?: number }).code;
+      if (code !== 10007 && code !== 10013) {
+        console.warn(`Could not verify dashboard membership for ${userId} in guild ${guild.id}: ${(err as Error).message}`);
+      }
+      return null;
+    }
+  }));
+  const result = ids.filter((id): id is string => id !== null);
+  guildAccessCache.set(userId, { expiresAt: Date.now() + GUILD_ACCESS_CACHE_MS, guildIds: result });
+  return result;
+}
+
 const core = {
   watcher,
   library,
   repo,
   queue,
+  accessibleGuildIds,
   // userId (optional) lets owners through whitelist/blacklist; it is only passed once the dashboard API supplies the signed-in user.
   canTarget: (guildId: string, channelId: string, userId?: string) =>
     access.guildAllowed(guildId, userId) && !!client.guilds.cache.get(guildId)?.channels.cache.get(channelId)?.isVoiceBased(),

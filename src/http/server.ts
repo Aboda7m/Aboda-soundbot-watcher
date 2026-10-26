@@ -333,11 +333,12 @@ export function createPublicServer(d: PublicDeps): Server {
           guard,
           readBody,
           headers: SECURITY_HEADERS,
+          userId: uid,
         });
         if (handled) return;
       }
 
-      if (d.logs && (await handleLogRoute(d.logs, req, res, url, { json }))) return;
+      if (d.logs && (await handleLogRoute(d.logs, req, res, url, { json, allowedGuildIds: await d.accessibleGuildIds?.(uid) ?? [] }))) return;
 
       if (await handleCoreApi(d, req, res, url, core)) return;
 

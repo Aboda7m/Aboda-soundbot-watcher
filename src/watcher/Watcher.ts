@@ -10,6 +10,8 @@ const REFRESH_EVENTS = [
   Events.GuildDelete,
   Events.GuildUnavailable,
   Events.GuildUpdate,
+  Events.GuildMemberAdd,
+  Events.GuildMemberRemove,
   Events.ChannelUpdate,
   Events.ChannelDelete,
   Events.ShardDisconnect,
@@ -27,7 +29,7 @@ export interface WatcherOptions {
 export class Watcher {
   #client: Client;
   #opts: WatcherOptions;
-  #sse = new Set<ServerResponse>();
+  #sse = new Map<ServerResponse, (() => Promise<readonly string[]>) | null>();
   #last = "";
   #timer: NodeJS.Timeout | null = null;
   #heartbeat: NodeJS.Timeout;
@@ -35,10 +37,9 @@ export class Watcher {
   constructor(client: Client, opts: WatcherOptions) {
     this.#client = client;
     this.#opts = opts;
-    
+
     for (const ev of REFRESH_EVENTS) {
       client.on(ev as string, (...args) => {
-        // Intercept voice state updates to run the dedicated logger file
         if (ev === Events.VoiceStateUpdate) {
           const [oldState, newState] = args;
           try {
@@ -47,45 +48,66 @@ export class Watcher {
             console.error("Failed to log voice activity:", err);
           }
         }
-        this.schedule();
+        this.schedule(ev === Events.GuildMemberAdd || ev === Events.GuildMemberRemove);
       });
     }
 
     this.#heartbeat = setInterval(() => {
-      for (const res of this.#sse) res.write(": ping\n\n");
+      for (const res of this.#sse.keys()) res.write(": ping\n\n");
     }, 25_000);
     this.#heartbeat.unref();
   }
 
-  payloadJson(): string {
-    return JSON.stringify({
-      ...buildSnapshot(this.#client, this.#opts.hideBots),
-      playback: this.#opts.extra?.() ?? null,
-    });
+  payloadJson(allowedGuildIds?: readonly string[]): string {
+    const allowed = allowedGuildIds ? new Set(allowedGuildIds) : undefined;
+    const snapshot = buildSnapshot(this.#client, this.#opts.hideBots, allowed);
+    const extra = this.#opts.extra?.() ?? null;
+    if (allowed && extra && typeof extra === "object") {
+      const playing = (extra as { playing?: unknown }).playing;
+      if (Array.isArray(playing)) {
+        (extra as { playing: unknown[] }).playing = playing.filter(
+          (item) => !!item && typeof item === "object" && allowed.has(String((item as { guildId?: unknown }).guildId)),
+        );
+      }
+    }
+    return JSON.stringify({ ...snapshot, playback: extra });
   }
 
-  addClient(res: ServerResponse) {
-    res.write(`retry: 3000\ndata: ${this.payloadJson()}\n\n`);
-    this.#sse.add(res);
+  async addClient(res: ServerResponse, getAllowedGuildIds?: () => Promise<readonly string[]>) {
+    const allowed = getAllowedGuildIds ? await getAllowedGuildIds() : undefined;
+    if (res.destroyed || res.writableEnded) return;
+    res.write(`retry: 3000\ndata: ${this.payloadJson(allowed)}\n\n`);
+    this.#sse.set(res, getAllowedGuildIds ?? null);
     res.on("close", () => this.#sse.delete(res));
   }
 
-  /** Coalesce bursts, then push only if something visible changed. */
-  schedule() {
+  /** Coalesce bursts, then push each client only the guilds it is allowed to see. */
+  schedule(force = false) {
     if (this.#timer) return;
     this.#timer = setTimeout(() => {
       this.#timer = null;
-      const json = this.payloadJson();
-      if (json === this.#last) return;
-      this.#last = json;
-      for (const res of this.#sse) res.write(`data: ${json}\n\n`);
+      const globalJson = this.payloadJson();
+      if (globalJson === this.#last && !force) return;
+      this.#last = globalJson;
+      for (const [res, getAllowedGuildIds] of this.#sse) {
+        void (async () => {
+          try {
+            const allowed = getAllowedGuildIds ? await getAllowedGuildIds() : undefined;
+            if (!res.destroyed && !res.writableEnded) res.write(`data: ${this.payloadJson(allowed)}\n\n`);
+          } catch {
+            // Never fall back to an unfiltered event if membership cannot be verified.
+            if (!res.destroyed && !res.writableEnded) res.end();
+            this.#sse.delete(res);
+          }
+        })();
+      }
     }, 250);
   }
 
   close() {
     clearInterval(this.#heartbeat);
     if (this.#timer) clearTimeout(this.#timer);
-    for (const res of this.#sse) res.end();
+    for (const res of this.#sse.keys()) res.end();
     this.#sse.clear();
   }
 }

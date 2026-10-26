@@ -10,6 +10,8 @@ export interface LogFiles {
 /** What the log routes borrow from server.ts so they share its headers and JSON helper. */
 export interface LogRouteKit {
   json(res: ServerResponse, status: number, body: unknown): void;
+  /** When supplied, only entries with a guildId in this list are visible. */
+  allowedGuildIds?: readonly string[];
 }
 
 type LogType = "sound" | "voice";
@@ -21,7 +23,7 @@ type LogEntry = Record<string, string | null>;
  */
 const FIELDS: Record<LogType, readonly string[]> = {
   sound: ["timestamp", "sound", "guildId", "channelId", "source", "trigger", "userId", "username"],
-  voice: ["timestamp", "action", "userId", "username", "guildName", "channelName", "previousChannelName"],
+  voice: ["timestamp", "action", "userId", "guildId", "username", "guildName", "channelName", "previousChannelName"],
 };
 
 const DEFAULT_LIMIT = 200;
@@ -163,7 +165,11 @@ export async function handleLogRoute(
 
   try {
     const file = type === "sound" ? logs.soundPlayFile : logs.voiceActivityFile;
-    const { entries, skipped } = await load(type, file);
+    const loaded = await load(type, file);
+    const entries = kit.allowedGuildIds
+      ? loaded.entries.filter((entry) => typeof entry.guildId === "string" && kit.allowedGuildIds!.includes(entry.guildId))
+      : loaded.entries;
+    const skipped = loaded.skipped;
     const total = entries.length;
 
     let start: number;
