@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createCooldown, planIntros, type VoiceMove } from "../src/sound/introRules.ts";
+import { createCooldown, planIntros, shouldPlayEntrance, type VoiceMove } from "../src/sound/introRules.ts";
 
 const lookup = {
   entrance: (id: string) => ({ u1: "hello", u2: "missing" })[id],
@@ -21,9 +21,9 @@ test("leave plays exit in the old channel", () => {
     { kind: "exit", sound: "bye", guildId: "g", channelId: "c1" },
   ]);
 });
-test("move plays exit (old channel) then entrance (new channel)", () => {
+test("moving between channels plays exit only, not entrance", () => {
   const plans = planIntros(move({ fromChannelId: "c1", toChannelId: "c2" }), lookup);
-  assert.deepEqual(plans.map((p) => [p.kind, p.channelId]), [["exit", "c1"], ["entrance", "c2"]]);
+  assert.deepEqual(plans.map((p) => [p.kind, p.channelId]), [["exit", "c1"]]);
 });
 test("mute/deafen (same channel), bots, unknown users and missing files do nothing", () => {
   assert.deepEqual(planIntros(move({ fromChannelId: "c1", toChannelId: "c1" }), lookup), []);
@@ -39,4 +39,11 @@ test("cooldown blocks repeats inside the window only", () => {
   assert.equal(ok("b"), true);
   t += 3000;
   assert.equal(ok("a"), true);
+});
+
+test("entrance sound is only eligible when joining from outside voice", () => {
+  assert.equal(shouldPlayEntrance(move({ toChannelId: "c1" })), true);
+  assert.equal(shouldPlayEntrance(move({ fromChannelId: "c1", toChannelId: "c2" })), false);
+  assert.equal(shouldPlayEntrance(move({ fromChannelId: "c1" })), false);
+  assert.equal(shouldPlayEntrance(move({ fromChannelId: null, toChannelId: null })), false);
 });

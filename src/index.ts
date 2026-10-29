@@ -11,7 +11,7 @@ import { createDiscordOAuth } from "./http/auth/discordOAuth.ts";
 import { createAuthorizer } from "./http/auth/authorize.ts";
 import { SessionStore } from "./http/auth/sessions.ts";
 import { ImportService } from "./import/ImportService.ts";
-import { createCooldown, planIntros } from "./sound/introRules.ts";
+import { createCooldown, planIntros, shouldPlayEntrance } from "./sound/introRules.ts";
 import { SoundLibrary } from "./sound/SoundLibrary.ts";
 import { SoundQueue } from "./sound/SoundQueue.ts";
 import { SoundRepository } from "./sound/SoundRepository.ts";
@@ -132,6 +132,9 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
       const exitSound = repo.exit(move.userId);
       if (exitSound && library.has(exitSound) && introAllowed(`${move.userId}:exit`)) queue.enqueue({ sound: exitSound, guildId: move.guildId, channelId: move.fromChannelId, source: "exit", requestedBy: { userId: move.userId, username: newState.member?.user?.tag ?? oldState.member?.user?.tag ?? null } });
     }
+    // Moving between voice channels is not a fresh entrance. Keep the exit sound above,
+    // but only run entrance policy for a join from outside voice (including reconnects).
+    if (!shouldPlayEntrance(move)) return;
     const policy = repo.guildEntranceSettings(move.guildId);
     if (policy.enabled === false) return;
     const adminAssignment = repo.guildEntranceAssignment(move.userId, move.guildId);

@@ -21,10 +21,11 @@ export interface IntroLookup {
 
 /**
  * Same rules as the legacy bot, with channel IDs compared instead of objects:
- *  - leaving or moving away from a channel  -> the user's exit sound plays in the channel they left
- *  - joining or moving into a channel       -> the user's entrance sound plays in the channel they entered
- *  - mute/deafen/stream changes (same channel) do nothing
- * A move plays the exit first, then the entrance. Bots never trigger intros.
+ *  - leaving a channel                         -> the user's exit sound plays in the channel they left
+ *  - joining from outside voice                -> the user's entrance sound plays in the channel they entered
+ *  - moving between channels                    -> exit sound only; channel moves are not fresh entrances
+ *  - mute/deafen/stream changes (same channel)  -> no sound
+ * Bots never trigger intros.
  */
 export function planIntros(move: VoiceMove, lookup: IntroLookup): IntroPlan[] {
   if (move.isBot) return [];
@@ -36,12 +37,20 @@ export function planIntros(move: VoiceMove, lookup: IntroLookup): IntroPlan[] {
     if (sound && lookup.hasSound(sound))
       plans.push({ kind: "exit", sound, guildId: move.guildId, channelId: move.fromChannelId });
   }
-  if (move.toChannelId) {
+  if (move.toChannelId && !move.fromChannelId) {
     const sound = lookup.entrance(move.userId, move.guildId);
     if (sound && lookup.hasSound(sound))
       plans.push({ kind: "entrance", sound, guildId: move.guildId, channelId: move.toChannelId });
   }
   return plans;
+}
+
+/**
+ * Entrance sounds are for joining from outside voice, not switching between channels.
+ * Channel moves may still play the exit sound for the channel being left.
+ */
+export function shouldPlayEntrance(move: Pick<VoiceMove, "fromChannelId" | "toChannelId">): boolean {
+  return move.toChannelId !== null && move.fromChannelId === null;
 }
 
 /** Returns true if the key is allowed now, false while it is cooling down. */
