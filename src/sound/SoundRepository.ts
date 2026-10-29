@@ -19,7 +19,7 @@ interface Db {
   entranceDurations: Record<string, number | null>;
   userGuildEntranceDurations: Record<string, Record<string, number | null>>;
   /** Guild-level automatic entrance policy and timing restrictions. */
-  guildEntrancePolicy: Record<string, { enabled?: boolean; maxDurationSec?: number | null; reconnectGraceSec?: number | null; minReconnectGraceSec?: number | null; userCooldownSec?: number | null; enforcedUserCooldownSec?: number | null; guildCooldownSec?: number | null; allowUserTiming?: boolean }>;
+  guildEntrancePolicy: Record<string, { enabled?: boolean; maxDurationSec?: number | null; reconnectGraceSec?: number | null; minReconnectGraceSec?: number | null; userCooldownSec?: number | null; enforcedUserCooldownSec?: number | null; guildCooldownSec?: number | null; allowUserTiming?: boolean; allowUserCooldown?: boolean }>;
   /** User-owned timing preferences. null explicitly disables reconnect suppression/cooldown. */
   userEntranceTiming: Record<string, { cooldownSec?: number | null; reconnectGraceSec?: number | null }>;
   userGuildEntranceTiming: Record<string, Record<string, { cooldownSec?: number | null; reconnectGraceSec?: number | null }>>;
@@ -36,7 +36,7 @@ const validPolicy = (v: unknown): boolean => {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
   const p = v as Record<string, unknown>;
   return Object.entries(p).every(([k, n]) => {
-    if (k === "enabled" || k === "allowUserTiming") return typeof n === "boolean";
+    if (k === "enabled" || k === "allowUserTiming" || k === "allowUserCooldown") return typeof n === "boolean";
     if (k === "maxDurationSec") return validDuration(n);
     if (["reconnectGraceSec", "minReconnectGraceSec", "userCooldownSec", "enforcedUserCooldownSec", "guildCooldownSec"].includes(k)) return n === null || (Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 86400);
     return true;
@@ -208,6 +208,7 @@ export class SoundRepository {
     for (const key of ["reconnectGraceSec", "minReconnectGraceSec", "userCooldownSec", "enforcedUserCooldownSec", "guildCooldownSec"] as const) if (key in next && next[key] !== null && (!Number.isInteger(next[key]) || (next[key] as number) < 0 || (next[key] as number) > 86400)) throw new Error(`${key} must be null or integer seconds from 0 to 86400`);
     if ("enabled" in next && typeof next.enabled !== "boolean") throw new Error("enabled must be boolean");
     if ("allowUserTiming" in next && typeof next.allowUserTiming !== "boolean") throw new Error("allowUserTiming must be boolean");
+    if ("allowUserCooldown" in next && typeof next.allowUserCooldown !== "boolean") throw new Error("allowUserCooldown must be boolean");
     this.#data.guildEntrancePolicy[guildId] = next; this.#dirty = true; this.flush();
   }
   userEntranceTiming(userId: string, guildId?: string) {

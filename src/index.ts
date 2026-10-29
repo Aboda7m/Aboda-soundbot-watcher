@@ -102,8 +102,8 @@ const envSeconds = (key: string, fallback: number) => {
   const value = Number(process.env[key] ?? fallback);
   return Number.isInteger(value) && value >= 0 && value <= 86400 ? value : fallback;
 };
-const GLOBAL_ENTRANCE_COOLDOWN_SEC = envSeconds("ENTRANCE_COOLDOWN_SEC", 300);
-const GLOBAL_RECONNECT_GRACE_SEC = envSeconds("ENTRANCE_RECONNECT_GRACE_SEC", 900);
+const GLOBAL_ENTRANCE_COOLDOWN_SEC = envSeconds("ENTRANCE_COOLDOWN_SEC", 0);
+const GLOBAL_RECONNECT_GRACE_SEC = envSeconds("ENTRANCE_RECONNECT_GRACE_SEC", 300);
 const now = () => Date.now();
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (!config.introsEnabled) return;
@@ -152,7 +152,7 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     }
     const userCooldownDefault = policy.userCooldownSec ?? GLOBAL_ENTRANCE_COOLDOWN_SEC;
     const enforcedCooldown = policy.enforcedUserCooldownSec ?? 0;
-    const requestedCooldown = personalTiming.cooldownSec;
+    const requestedCooldown = policy.allowUserCooldown === false ? undefined : personalTiming.cooldownSec;
     const effectiveUserCooldown = Math.max(enforcedCooldown, requestedCooldown === undefined ? userCooldownDefault : requestedCooldown ?? 0);
     const key = move.userId;
     const t = now();
