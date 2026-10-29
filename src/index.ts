@@ -57,6 +57,13 @@ const queue: SoundQueue = new SoundQueue({
   maxPerGuild: config.maxQueuePerGuild,
   idleLeaveMs: config.idleLeaveMs,
   onPlayed: (name) => repo.recordPlay(name),
+  onStarted: (item) => {
+    if (item.source !== "entrance") return;
+    const t = now();
+    if (item.requestedBy?.userId) lastEntranceByUser.set(item.requestedBy.userId, t);
+    lastEntranceByGuild.set(item.guildId, t);
+  },
+  onFinished: (item) => { if (item.source === "entrance" && item.requestedBy?.userId) pendingEntranceUsers.delete(item.requestedBy.userId); },
   onChange: () => watcher.schedule(),
   log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
 });
@@ -86,7 +93,18 @@ try {
 }
 
 // Automatic intro / outro sounds
-const introAllowed = createCooldown(config.introCooldownMs);
+const introAllowed = createCooldown(config.introCooldownMs); // legacy exit cooldown semantics
+const lastEntranceByUser = new Map<string, number>();
+const lastEntranceByGuild = new Map<string, number>();
+const disconnectedAt = new Map<string, number>();
+const pendingEntranceUsers = new Set<string>();
+const envSeconds = (key: string, fallback: number) => {
+  const value = Number(process.env[key] ?? fallback);
+  return Number.isInteger(value) && value >= 0 && value <= 86400 ? value : fallback;
+};
+const GLOBAL_ENTRANCE_COOLDOWN_SEC = envSeconds("ENTRANCE_COOLDOWN_SEC", 300);
+const GLOBAL_RECONNECT_GRACE_SEC = envSeconds("ENTRANCE_RECONNECT_GRACE_SEC", 900);
+const now = () => Date.now();
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (!config.introsEnabled) return;
   try {
@@ -94,27 +112,65 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     if (!move || move.userId === client.user?.id) return;
     // Same whitelist/blacklist as the text commands: no automatic sounds for servers or users the owner has not allowed.
     if (!access.canUseBot(move.guildId, move.userId)) return;
-    for (const plan of planIntros(move, {
-      entrance: (id, guildId) => repo.entrance(id, guildId),
-      exit: (id) => repo.exit(id),
-      hasSound: (name) => library.has(name),
-    })) {
-      if (!introAllowed(`${move.userId}:${plan.kind}`)) continue;
-
-      const member = newState.member || oldState.member;
-      const username = member?.user ? (member.user.tag ?? member.user.username) : null;
-
-      queue.enqueue({
-        sound: plan.sound,
-        guildId: plan.guildId,
-        channelId: plan.channelId,
-        source: plan.kind,
-        requestedBy: {
-          userId: move.userId,
-          username,
-        },
-      });
+    // Only a real channel -> no-channel transition starts a reconnect interval.
+    const sessionKey = `${move.guildId}:${move.userId}`;
+    if (move.fromChannelId && !move.toChannelId) {
+      if (!disconnectedAt.has(sessionKey)) disconnectedAt.set(sessionKey, now());
     }
+    const reconnectAt = !move.fromChannelId && move.toChannelId ? disconnectedAt.get(sessionKey) : undefined;
+    const disconnectedForMs = reconnectAt === undefined ? null : Math.max(0, now() - reconnectAt);
+    if (!move.toChannelId) {
+      for (const plan of planIntros(move, { entrance: () => undefined, exit: (id) => repo.exit(id), hasSound: (name) => library.has(name) })) {
+        if (!introAllowed(`${move.userId}:${plan.kind}`)) continue;
+        queue.enqueue({ sound: plan.sound, guildId: plan.guildId, channelId: plan.channelId, source: plan.kind,
+          requestedBy: { userId: move.userId, username: newState.member?.user?.tag ?? oldState.member?.user?.tag ?? null } });
+      }
+      return;
+    }
+    if (move.toChannelId && reconnectAt !== undefined) disconnectedAt.delete(sessionKey);
+    if (move.fromChannelId) {
+      const exitSound = repo.exit(move.userId);
+      if (exitSound && library.has(exitSound) && introAllowed(`${move.userId}:exit`)) queue.enqueue({ sound: exitSound, guildId: move.guildId, channelId: move.fromChannelId, source: "exit", requestedBy: { userId: move.userId, username: newState.member?.user?.tag ?? oldState.member?.user?.tag ?? null } });
+    }
+    const policy = repo.guildEntranceSettings(move.guildId);
+    if (policy.enabled === false) return;
+    const adminAssignment = repo.guildEntranceAssignment(move.userId, move.guildId);
+    const userGuildPreference = repo.userGuildEntrance(move.userId, move.guildId);
+    const selectedSound = adminAssignment !== undefined ? adminAssignment : userGuildPreference !== undefined ? userGuildPreference : repo.entrance(move.userId);
+    if (!selectedSound || !library.has(selectedSound)) return;
+
+    const personalTiming = policy.allowUserTiming === false ? {} : repo.userEntranceTiming(move.userId, move.guildId);
+    const configuredGrace = policy.reconnectGraceSec === undefined ? GLOBAL_RECONNECT_GRACE_SEC : policy.reconnectGraceSec;
+    const minGrace = policy.minReconnectGraceSec ?? 0;
+    const userGrace = personalTiming.reconnectGraceSec;
+    const effectiveGrace = userGrace === undefined
+      ? configuredGrace === null ? (minGrace > 0 ? minGrace : null) : Math.max(configuredGrace, minGrace)
+      : userGrace === null ? (minGrace > 0 ? minGrace : null) : Math.max(userGrace, minGrace);
+    if (disconnectedForMs !== null && effectiveGrace !== null && disconnectedForMs < effectiveGrace * 1000) {
+      console.info(`[entrance] suppressed reconnect: guild=${move.guildId} user=${move.userId} disconnectedSec=${Math.floor(disconnectedForMs / 1000)} graceSec=${effectiveGrace}`);
+      return;
+    }
+    const userCooldownDefault = policy.userCooldownSec ?? GLOBAL_ENTRANCE_COOLDOWN_SEC;
+    const enforcedCooldown = policy.enforcedUserCooldownSec ?? 0;
+    const requestedCooldown = personalTiming.cooldownSec;
+    const effectiveUserCooldown = Math.max(enforcedCooldown, requestedCooldown === undefined ? userCooldownDefault : requestedCooldown ?? 0);
+    const key = move.userId;
+    const t = now();
+    if (pendingEntranceUsers.has(key)) return;
+    const lastUser = lastEntranceByUser.get(move.userId);
+    if (lastUser !== undefined && t - lastUser < effectiveUserCooldown * 1000) return;
+    const guildCooldown = policy.guildCooldownSec ?? 0;
+    const lastGuild = lastEntranceByGuild.get(move.guildId);
+    if (guildCooldown > 0 && lastGuild !== undefined && t - lastGuild < guildCooldown * 1000) return;
+
+    const personalDuration = repo.userEntranceDuration(move.userId, move.guildId);
+    const guildDuration = policy.maxDurationSec;
+    const caps = [personalDuration, guildDuration].filter((v): v is number => Number.isInteger(v) && v !== null);
+    pendingEntranceUsers.add(key);
+    const result = queue.enqueue({ sound: selectedSound, guildId: move.guildId, channelId: move.toChannelId, source: "entrance",
+      maxDurationSec: caps.length ? Math.min(...caps) : undefined,
+      requestedBy: { userId: move.userId, username: newState.member?.user?.tag ?? newState.member?.user?.username ?? null } });
+    if (!result.ok) pendingEntranceUsers.delete(key);
   } catch (err) {
     console.error("Intro handling failed:", err);
   }

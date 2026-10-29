@@ -29,12 +29,13 @@ export class DiscordVoiceAdapter implements VoicePort {
     this.#client = client;
   }
 
-  async play(guildId: string, channelId: string, filePath: string): Promise<void> {
+  async play(guildId: string, channelId: string, filePath: string, maxDurationSec?: number, onStarted?: () => void): Promise<void> {
     const { player } = await this.#ensure(guildId, channelId);
     const resource = createResource(filePath);
 
     await new Promise<void>((resolve, reject) => {
       let started = false;
+      let durationTimer: NodeJS.Timeout | null = null;
       const startTimer = setTimeout(() => {
         cleanup();
         player.stop(true);
@@ -43,8 +44,15 @@ export class DiscordVoiceAdapter implements VoicePort {
 
       const onState = (_old: unknown, next: { status: AudioPlayerStatus }) => {
         if (next.status === AudioPlayerStatus.Playing) {
-          started = true;
-          clearTimeout(startTimer);
+          if (!started) {
+            started = true;
+            clearTimeout(startTimer);
+            onStarted?.();
+            if (Number.isInteger(maxDurationSec) && maxDurationSec! >= 1 && maxDurationSec! <= 30) {
+              durationTimer = setTimeout(() => player.stop(true), maxDurationSec! * 1000);
+              durationTimer.unref();
+            }
+          }
         } else if (next.status === AudioPlayerStatus.Idle && started) {
           cleanup();
           resolve();
@@ -56,6 +64,8 @@ export class DiscordVoiceAdapter implements VoicePort {
       };
       const cleanup = () => {
         clearTimeout(startTimer);
+        if (durationTimer) clearTimeout(durationTimer);
+        durationTimer = null;
         player.off("stateChange", onState);
         player.off("error", onError);
       };

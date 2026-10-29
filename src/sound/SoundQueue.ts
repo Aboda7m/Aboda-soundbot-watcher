@@ -12,6 +12,8 @@ export interface PlayRequest {
   /** How the request arrived, for the play log. Left out = derived from `source`. */
   trigger?: SoundPlayTrigger;
   requestedBy?: { userId: string; username?: string | null } | null;
+  /** Automatic entrance-only cap. Ignored for manual and exit requests. */
+  maxDurationSec?: number;
 }
 
 export interface QueueItem extends PlayRequest {
@@ -44,6 +46,8 @@ export interface SoundQueueDeps {
   /** stay in the channel this long after the last sound; 0 leaves immediately */
   idleLeaveMs: number;
   onPlayed?(name: string): void;
+  onStarted?(item: QueueItem): void;
+  onFinished?(item: QueueItem, succeeded: boolean): void;
   onChange?(): void;
   log?(message: string, err?: unknown): void;
 }
@@ -135,7 +139,8 @@ export class SoundQueue {
     const index = g.items.findIndex((item) => item.id === id);
     if (index === -1) return false;
 
-    g.items.splice(index, 1);
+    const [removed] = g.items.splice(index, 1);
+    if (removed) this.#d.onFinished?.(removed, false);
     this.#d.onChange?.();
 
     return true;
@@ -146,7 +151,7 @@ export class SoundQueue {
     const g = this.#guilds.get(guildId);
     if (!g || g.items.length === 0) return;
 
-    g.items.length = 0;
+    for (const item of g.items.splice(0)) this.#d.onFinished?.(item, false);
     this.#d.onChange?.();
   }
 
@@ -155,7 +160,7 @@ export class SoundQueue {
     const g = this.#guilds.get(guildId);
     if (!g) return;
 
-    g.items.length = 0;
+    for (const item of g.items.splice(0)) this.#d.onFinished?.(item, false);
     this.#d.voice.stop(guildId);
     this.#d.onChange?.();
   }
@@ -181,7 +186,7 @@ export class SoundQueue {
     this.#closed = true;
 
     for (const [guildId, g] of this.#guilds) {
-      g.items.length = 0;
+      for (const item of g.items.splice(0)) this.#d.onFinished?.(item, false);
 
       if (g.idleTimer) {
         clearTimeout(g.idleTimer);
@@ -220,6 +225,7 @@ export class SoundQueue {
         g.current = req;
         this.#d.onChange?.();
 
+        let succeeded = false;
         try {
           const path = this.#d.resolvePath(req.sound);
 
@@ -227,7 +233,8 @@ export class SoundQueue {
             throw new Error(`Sound "${req.sound}" no longer exists`);
           }
 
-          await this.#d.voice.play(guildId, req.channelId, path);
+          await this.#d.voice.play(guildId, req.channelId, path, req.source === "entrance" ? req.maxDurationSec : undefined, () => this.#d.onStarted?.(req));
+          succeeded = true;
           this.#d.onPlayed?.(req.sound);
           this.#recordPlay(req);
         } catch (err) {
@@ -236,6 +243,7 @@ export class SoundQueue {
             err,
           );
         } finally {
+          this.#d.onFinished?.(req, succeeded);
           g.current = null;
           this.#d.onChange?.();
         }

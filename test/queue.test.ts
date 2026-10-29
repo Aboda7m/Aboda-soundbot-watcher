@@ -116,3 +116,17 @@ test("shutdown refuses new work and destroys voice", () => {
   assert.deepEqual(q.enqueue(req("a")), { ok: false, reason: "shutting-down" });
   assert.equal(v.log.includes("destroyAll"), true);
 });
+
+test("only automatic entrance requests pass a duration cap to the voice adapter", async () => {
+  const calls: Array<{ path: string; cap?: number }> = [];
+  const voice: VoicePort = {
+    async play(_guildId, _channelId, path, cap) { calls.push({ path, cap }); },
+    stop() {}, leave() {}, destroyAll() {},
+  };
+  const q = make(voice);
+  q.enqueue({ ...req("auto"), source: "entrance", maxDurationSec: 7 });
+  q.enqueue({ ...req("manual"), source: "manual", maxDurationSec: 3 });
+  q.enqueue({ ...req("exit"), source: "exit", maxDurationSec: 2 });
+  await settle();
+  assert.deepEqual(calls, [{ path: "auto", cap: 7 }, { path: "manual", cap: undefined }, { path: "exit", cap: undefined }]);
+});

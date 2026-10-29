@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, utimesSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, utimesSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SoundRepository } from "../src/sound/SoundRepository.ts";
@@ -120,4 +120,39 @@ test("setEntrance creates db.json when missing; clearing a missing entry writes 
   assert.equal(existsSync(p), false);
   r.setEntrance("1", "a");
   assert.deepEqual(JSON.parse(readFileSync(p, "utf8")).entrances, { "1": "a" });
+});
+
+test("entrance policy settings preserve legacy admin suppression and release restores fallback", () => {
+  const dir = mkdtempSync(join(tmpdir(), "soundbot-policy-"));
+  const file = join(dir, "db.json");
+  try {
+    const repo = new SoundRepository(file, { countPlays: false });
+    repo.setEntrance("222222222222222", "global");
+    repo.setGuildEntrance("111111111111111", "222222222222222", "");
+    repo.setUserGuildEntrance("222222222222222", "111111111111111", "personal-guild");
+    assert.equal(repo.guildEntranceAssignment("222222222222222", "111111111111111"), "");
+    assert.equal(repo.userGuildEntrance("222222222222222", "111111111111111"), "personal-guild");
+    assert.equal(repo.releaseGuildEntrance("111111111111111", "222222222222222"), true);
+    assert.equal(repo.guildEntranceAssignment("222222222222222", "111111111111111"), undefined);
+    repo.setUserEntranceDuration("222222222222222", 12);
+    repo.setUserEntranceDuration("222222222222222", 8, "111111111111111");
+    repo.setUserEntranceTiming("222222222222222", { cooldownSec: 420, reconnectGraceSec: 1200 });
+    repo.setGuildEntranceSettings("111111111111111", { enabled: false, maxDurationSec: 10, guildCooldownSec: 0 });
+    assert.equal(repo.userEntranceDuration("222222222222222"), 12);
+    assert.equal(repo.userEntranceDuration("222222222222222", "111111111111111"), 8);
+    assert.equal(repo.userEntranceTiming("222222222222222").cooldownSec, 420);
+    assert.equal(repo.guildEntranceSettings("111111111111111").enabled, false);
+    const reloaded = new SoundRepository(file, { countPlays: false });
+    assert.equal(reloaded.userGuildEntrance("222222222222222", "111111111111111"), "personal-guild");
+    assert.equal(reloaded.guildEntranceAssignment("222222222222222", "111111111111111"), undefined);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("invalid duration caps are rejected", () => {
+  const dir = mkdtempSync(join(tmpdir(), "soundbot-policy-invalid-"));
+  try {
+    const repo = new SoundRepository(join(dir, "db.json"), { countPlays: false });
+    assert.throws(() => repo.setUserEntranceDuration("222222222222222", 31), /Duration/);
+    assert.throws(() => repo.setGuildEntranceSettings("111111111111111", { maxDurationSec: 0 }), /maxDurationSec/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
