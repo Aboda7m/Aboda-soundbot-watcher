@@ -38,9 +38,10 @@ async function loadMembers(guildId) {
   state.members = [];
   $("members").replaceChildren();
   showError("");
-  if (!guildId) { $("status").textContent = "Select a server."; return; }
+  if (!guildId) { $("status").textContent = "Select a server."; $("member-search").disabled = true; return; }
   $("status").textContent = "Loading members…";
   $("guild").disabled = true;
+  $("member-search").disabled = true;
   try {
     const [data, policyData] = await Promise.all([
       api(`/api/entrance/admin/members?guildId=${encodeURIComponent(guildId)}`),
@@ -51,6 +52,7 @@ async function loadMembers(guildId) {
     $("policy-duration").value = policyData.policy.maxDurationSec ?? "";
     state.members = data.members || [];
     $("status").textContent = `${state.members.length} members loaded from ${data.guild.name}.`;
+    $("member-search").disabled = false;
     renderMembers();
   } catch (err) {
     $("status").textContent = "Could not load members.";
@@ -60,20 +62,72 @@ async function loadMembers(guildId) {
   }
 }
 
+function hasActiveAssignment(m) {
+  return Boolean(m.adminMode === "suppressed" || m.adminMode === "assigned" || m.sound);
+}
+
 function renderMembers() {
   const root = $("members");
   root.replaceChildren();
-  if (!state.members.length) {
+  
+  const query = $("member-search").value.trim().toLowerCase();
+
+  // Filter by search query if present
+  let filtered = state.members.filter(m => {
+    if (!query) return true;
+    const name = (m.displayName || "").toLowerCase();
+    const uname = (m.username || "").toLowerCase();
+    const id = (m.id || "").toLowerCase();
+    return name.includes(query) || uname.includes(query) || id.includes(query);
+  });
+
+  // Sort: Assigned/active items first, then A-Z by display name / username
+  filtered.sort((a, b) => {
+    const aActive = hasActiveAssignment(a);
+    const bActive = hasActiveAssignment(b);
+    if (aActive && !bActive) return -1;
+    if (!aActive && bActive) return 1;
+
+    const nameA = (a.displayName || a.username || "").toLowerCase();
+    const nameB = (b.displayName || b.username || "").toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+
+  if (!filtered.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "No members were returned for this server.";
+    empty.textContent = query ? "No members match your search." : "No members were returned for this server.";
     root.append(empty);
     return;
   }
-  for (const member of state.members) {
+
+  for (const member of filtered) {
     const row = document.createElement("article"); row.className = "member";
     const info = document.createElement("div"); info.className = "name";
-    const title = document.createElement("strong"); title.textContent = member.displayName || member.username;
+    
+    const titleRow = document.createElement("div");
+    titleRow.className = "title-row";
+    
+    const title = document.createElement("strong"); 
+    title.textContent = member.displayName || member.username;
+    
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "copy-id-btn";
+    copyBtn.textContent = "Copy ID";
+    copyBtn.setAttribute("aria-label", `Copy user ID for ${member.username}`);
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(member.id);
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => { copyBtn.textContent = "Copy ID"; }, 1500);
+      } catch {
+        showError("Failed to copy user ID.");
+      }
+    });
+
+    titleRow.append(title, copyBtn);
+
     const detail = document.createElement("div"); detail.className = "assignment";
     detail.textContent = member.adminMode === "suppressed"
       ? "Administrator-suppressed in this server"
@@ -83,7 +137,7 @@ function renderMembers() {
           ? "Member disabled their entrance in this server"
           : member.sound ? `${member.userMode === "sound" ? "Member's custom server sound" : "Member's global sound"}: ${member.sound}${member.exists ? "" : " (file missing)"}`
             : "No entrance sound assigned";
-    info.append(title, detail);
+    info.append(titleRow, detail);
 
     const select = document.createElement("select"); select.setAttribute("aria-label", `Entrance sound for ${member.username}`);
     select.add(new Option("Choose a sound…", ""));
@@ -122,6 +176,7 @@ function renderMembers() {
 }
 
 $("guild").addEventListener("change", () => loadMembers($("guild").value));
+$("member-search").addEventListener("input", renderMembers);
 init();
 
 $("save-policy").addEventListener("click", async () => {
