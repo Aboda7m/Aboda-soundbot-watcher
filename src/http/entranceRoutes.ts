@@ -21,11 +21,12 @@ import { mayAdministerGuild } from "./entranceAdminAuth.ts";
  */
 export interface EntranceDeps {
   library: Pick<SoundLibrary, "has" | "resolve">;
-  repo: Pick<SoundRepository, "entrance" | "setEntrance" | "clearEntrance" | "setGuildEntrance" | "clearGuildEntrance" | "hasGuildEntranceOverride" | "guildEntranceAssignment" | "releaseGuildEntrance" | "userGuildEntrance" | "setUserGuildEntrance" | "userEntranceDuration" | "setUserEntranceDuration" | "guildEntranceSettings" | "setGuildEntranceSettings" | "userEntranceTiming" | "setUserEntranceTiming">;
+  repo: Pick<SoundRepository, "entrance" | "setEntrance" | "clearEntrance" | "setGuildEntrance" | "clearGuildEntrance" | "hasGuildEntranceOverride" | "guildEntranceAssignment" | "releaseGuildEntrance" | "userGuildEntrance" | "setUserGuildEntrance" | "userEntranceDuration" | "userGuildEntranceDuration" | "setUserEntranceDuration" | "guildEntranceSettings" | "setGuildEntranceSettings" | "userEntranceTiming" | "setUserEntranceTiming"> & Partial<Pick<SoundRepository, "botEntranceDurationCap" | "setBotEntranceDurationCap">>;
   accessibleGuildIds?: (userId: string) => Promise<readonly string[]>;
   client?: Client;
   /** Bot-level grant; unlike Discord guild permissions, this capability intentionally applies to all bot guilds. */
   canManageEntrances?: (userId: string) => boolean;
+  canManageSystemEntrances?: (userId: string) => boolean;
 }
 
 export interface EntranceKit {
@@ -73,13 +74,39 @@ async function handleAdminRoute(
   const { pathname } = url;
   const isGet = req.method === "GET";
   const isPost = req.method === "POST";
-  const known = (isGet && (pathname === "/api/entrance/admin/guilds" || pathname === "/api/entrance/admin/members")) ||
+  const known = (isGet && (pathname === "/api/entrance/admin/guilds" || pathname === "/api/entrance/admin/members" || pathname === "/api/entrance/system/status" || pathname === "/api/entrance/system/user-duration")) ||
     (isGet && pathname === "/api/entrance/admin/policy") ||
-    (isPost && (pathname === "/api/entrance/admin/assign" || pathname === "/api/entrance/admin/clear" || pathname === "/api/entrance/admin/release" || pathname === "/api/entrance/admin/policy"));
+    (isPost && (pathname === "/api/entrance/admin/assign" || pathname === "/api/entrance/admin/clear" || pathname === "/api/entrance/admin/release" || pathname === "/api/entrance/admin/policy" || pathname === "/api/entrance/system/user-duration"));
   if (!known) return false;
   if (!d.client) { json(res, 503, { error: "Entrance administration is unavailable" }); return true; }
 
   const hasBotEntranceGrant = d.canManageEntrances?.(kit.user.id) === true;
+  const canManageSystem = d.canManageSystemEntrances?.(kit.user.id) === true;
+  if (pathname === "/api/entrance/system/status" && isGet) {
+    json(res, 200, { allowed: canManageSystem }); return true;
+  }
+  if (pathname === "/api/entrance/system/user-duration" && isGet) {
+    if (!canManageSystem) { json(res, 403, { error: "Bot administrator permission required" }); return true; }
+    const targetId = url.searchParams.get("userId") ?? "";
+    if (!SNOWFLAKE.test(targetId)) { json(res, 400, { error: "userId must be a Discord ID" }); return true; }
+    json(res, 200, { userId: targetId, durationSec: d.repo.botEntranceDurationCap?.(targetId) ?? null }); return true;
+  }
+  if (pathname === "/api/entrance/system/user-duration" && isPost) {
+    if (!canManageSystem) { json(res, 403, { error: "Bot administrator permission required" }); return true; }
+    if (!kit.guard(req, res)) return true;
+    let systemBody: Record<string, unknown>;
+    try { systemBody = JSON.parse(await readBody(req)) as Record<string, unknown>; } catch { json(res, 400, { error: "Body must be valid JSON under 2 KB" }); return true; }
+    const targetId = systemBody.userId; const seconds = systemBody.durationSec;
+    if (typeof targetId !== "string" || !SNOWFLAKE.test(targetId)) { json(res, 400, { error: "userId must be a Discord ID" }); return true; }
+    if (seconds !== null && (!Number.isInteger(seconds) || (seconds as number) < 1 || (seconds as number) > 30)) { json(res, 400, { error: "durationSec must be null or an integer from 1 to 30" }); return true; }
+    try {
+      if (!d.repo.setBotEntranceDurationCap || !d.repo.botEntranceDurationCap) throw new Error("System entrance restrictions are unavailable");
+      d.repo.setBotEntranceDurationCap(targetId, seconds as number | null);
+      json(res, 200, { ok: true, durationSec: d.repo.botEntranceDurationCap(targetId) ?? null });
+    }
+    catch (e) { json(res, 400, { error: (e as Error).message }); }
+    return true;
+  }
 
   if (isGet && pathname === "/api/entrance/admin/guilds") {
     const guilds = [];
@@ -108,11 +135,16 @@ async function handleAdminRoute(
       json(res, 200, { guild: { id: guild.id, name: guild.name }, members: [...members.values()]
         .filter((m) => !m.user.bot)
         .map((m) => {
-          const sound = d.repo.entrance(m.id, guild.id) ?? null;
+          const assignment = d.repo.guildEntranceAssignment(m.id, guild.id);
+          const personalGuild = d.repo.userGuildEntrance(m.id, guild.id);
+          const globalSound = d.repo.entrance(m.id);
+          const sound = assignment !== undefined ? assignment || null : personalGuild !== undefined ? personalGuild || null : globalSound ?? null;
           return {
             id: m.id, username: m.user.username, displayName: m.displayName, sound,
             exists: sound ? d.library.has(sound) : false,
-            guildOverride: d.repo.hasGuildEntranceOverride(m.id, guild.id),
+            guildOverride: assignment !== undefined,
+            userMode: personalGuild === undefined ? "inherit" : personalGuild === "" ? "disabled" : "sound",
+            adminMode: assignment === undefined ? "none" : assignment === "" ? "suppressed" : "assigned",
           };
         }).sort((a, b) => a.displayName.localeCompare(b.displayName)) });
     } catch {
@@ -177,7 +209,7 @@ export async function handleEntranceRoute(
   const isPost = req.method === "POST";
 
   const known =
-    (isGet && ["/api/entrance", "/api/entrance/preview", "/api/entrance/settings"].includes(pathname)) ||
+    (isGet && ["/api/entrance", "/api/entrance/preview", "/api/entrance/settings", "/api/entrance/guilds"].includes(pathname)) ||
     (isPost && ["/api/entrance", "/api/entrance/clear", "/api/entrance/preferences", "/api/entrance/duration", "/api/entrance/timing"].includes(pathname));
   if (!known) return false;
 
@@ -193,7 +225,18 @@ export async function handleEntranceRoute(
       user: { id: uid, username: kit.user.username },
       sound,
       exists: sound === null ? false : d.library.has(sound),
+      durationSec: d.repo.userEntranceDuration(uid) ?? null,
     });
+    return true;
+  }
+
+  if (isGet && pathname === "/api/entrance/guilds") {
+    if (!d.accessibleGuildIds) { json(res, 503, { error: "Guild access information unavailable" }); return true; }
+    try {
+      const ids = await d.accessibleGuildIds(uid);
+      const guilds = ids.map((id) => ({ id, name: d.client?.guilds.cache.get(id)?.name ?? id }));
+      json(res, 200, { guilds });
+    } catch { json(res, 503, { error: "Could not verify guild access" }); }
     return true;
   }
 
@@ -207,7 +250,8 @@ export async function handleEntranceRoute(
     const globalSound = d.repo.entrance(uid);
     const policy = d.repo.guildEntranceSettings(guildId);
     const duration = d.repo.userEntranceDuration(uid, guildId);
-    json(res, 200, { guildId, mode: guildPref === undefined ? "inherit" : guildPref === "" ? "disabled" : "sound", guildSound: guildPref || null, globalSound: globalSound ?? null, durationSec: duration ?? null, timing: d.repo.userEntranceTiming(uid, guildId), policy, effectiveSound: policy.enabled === false ? null : d.repo.guildEntranceAssignment(uid, guildId) !== undefined ? (d.repo.guildEntranceAssignment(uid, guildId) || null) : guildPref !== undefined ? (guildPref || null) : (globalSound ?? null) });
+    const durationCaps = [duration, policy.maxDurationSec, d.repo.botEntranceDurationCap?.(uid)].filter((v): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 30);
+    json(res, 200, { guildId, mode: guildPref === undefined ? "inherit" : guildPref === "" ? "disabled" : "sound", guildSound: guildPref || null, globalSound: globalSound ?? null, durationSec: duration ?? null, personalDurationSec: duration ?? null, globalPersonalDurationSec: d.repo.userEntranceDuration(uid) ?? null, guildPersonalDurationSec: d.repo.userGuildEntranceDuration(uid, guildId) ?? null, guildDurationSec: policy.maxDurationSec ?? null, botAdminDurationSec: d.repo.botEntranceDurationCap?.(uid) ?? null, effectiveDurationSec: durationCaps.length ? Math.min(...durationCaps) : null, timing: d.repo.userEntranceTiming(uid, guildId), policy, effectiveSound: policy.enabled === false ? null : d.repo.guildEntranceAssignment(uid, guildId) !== undefined ? (d.repo.guildEntranceAssignment(uid, guildId) || null) : guildPref !== undefined ? (guildPref || null) : (globalSound ?? null) });
     return true;
   }
 

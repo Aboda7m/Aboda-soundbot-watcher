@@ -17,6 +17,8 @@ interface Db {
   userGuildEntrances: Record<string, Record<string, string>>;
   /** Optional duration caps in seconds, global user cap and per-guild caps. */
   entranceDurations: Record<string, number | null>;
+  /** Bot-admin enforced automatic entrance duration caps; independent from user and guild preferences. */
+  botEntranceDurationCaps: Record<string, number>;
   userGuildEntranceDurations: Record<string, Record<string, number | null>>;
   /** Guild-level automatic entrance policy and timing restrictions. */
   guildEntrancePolicy: Record<string, { enabled?: boolean; maxDurationSec?: number | null; reconnectGraceSec?: number | null; minReconnectGraceSec?: number | null; userCooldownSec?: number | null; enforcedUserCooldownSec?: number | null; guildCooldownSec?: number | null; allowUserTiming?: boolean; allowUserCooldown?: boolean }>;
@@ -55,6 +57,7 @@ function validate(raw: unknown): Db {
   d.sounds ??= [];
   d.userGuildEntrances ??= {};
   d.entranceDurations ??= {};
+  d.botEntranceDurationCaps ??= {};
   d.userGuildEntranceDurations ??= {};
   d.guildEntrancePolicy ??= {};
   d.userEntranceTiming ??= {};
@@ -78,6 +81,7 @@ function validate(raw: unknown): Db {
   if (!Object.values(d.userGuildEntranceDurations as Record<string, unknown>).every((v) => typeof v === "object" && v !== null && !Array.isArray(v) && Object.values(v as Record<string, unknown>).every(validDuration))) throw new Error("db.json: 'userGuildEntranceDurations' contains invalid duration caps");
   if (!Object.values(d.userEntranceTiming as Record<string, unknown>).every(validTiming) || !Object.values(d.userGuildEntranceTiming as Record<string, unknown>).every((v) => typeof v === "object" && v !== null && !Array.isArray(v) && Object.values(v as Record<string, unknown>).every(validTiming))) throw new Error("db.json: timing settings are invalid");
   if (!Object.values(d.guildEntrancePolicy as Record<string, unknown>).every(validPolicy)) throw new Error("db.json: guild entrance policy is invalid");
+  if (typeof d.botEntranceDurationCaps !== "object" || d.botEntranceDurationCaps === null || Array.isArray(d.botEntranceDurationCaps) || !Object.values(d.botEntranceDurationCaps as Record<string, unknown>).every((v) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 30)) throw new Error("db.json: botEntranceDurationCaps values must be integer seconds from 1 to 30");
   if (typeof d.entranceDurations !== "object" || d.entranceDurations === null || Array.isArray(d.entranceDurations) ||
       !Object.values(d.entranceDurations as Record<string, unknown>).every(validDuration))
     throw new Error("db.json: 'entranceDurations' values must be null or integer seconds from 1 to 30");
@@ -95,7 +99,7 @@ function validate(raw: unknown): Db {
 export class SoundRepository {
   #path: string;
   #countPlays: boolean;
-  #data: Db = { entrances: {}, guildEntrances: {}, exits: {}, ignoreList: [], sounds: [], userGuildEntrances: {}, entranceDurations: {}, userGuildEntranceDurations: {}, guildEntrancePolicy: {}, userEntranceTiming: {}, userGuildEntranceTiming: {} };
+  #data: Db = { entrances: {}, guildEntrances: {}, exits: {}, ignoreList: [], sounds: [], userGuildEntrances: {}, entranceDurations: {}, userGuildEntranceDurations: {}, botEntranceDurationCaps: {}, guildEntrancePolicy: {}, userEntranceTiming: {}, userGuildEntranceTiming: {} };
   #mtime = -1;
   #dirty = false;
   #timer: NodeJS.Timeout | null = null;
@@ -188,6 +192,12 @@ export class SoundRepository {
     else this.#data.userGuildEntrances[guildId][userId] = sound;
     this.#dirty = true; this.flush();
   }
+  userGuildEntranceDuration(userId: string, guildId: string): number | undefined {
+    this.#reloadIfChanged();
+    const map = this.#data.userGuildEntranceDurations[guildId];
+    const value = map && Object.hasOwn(map, userId) ? map[userId] : undefined;
+    return typeof value === "number" ? value : undefined;
+  }
   userEntranceDuration(userId: string, guildId?: string): number | null | undefined {
     this.#reloadIfChanged();
     if (guildId && Object.hasOwn(this.#data.userGuildEntranceDurations[guildId] ?? {}, userId)) return this.#data.userGuildEntranceDurations[guildId][userId];
@@ -200,6 +210,18 @@ export class SoundRepository {
     else if (seconds === null) delete this.#data.entranceDurations[userId]; else this.#data.entranceDurations[userId] = seconds;
     this.#dirty = true; this.flush();
   }
+  botEntranceDurationCap(userId: string): number | undefined {
+    this.#reloadIfChanged();
+    return this.#data.botEntranceDurationCaps[userId];
+  }
+  setBotEntranceDurationCap(userId: string, seconds: number | null): void {
+    if (seconds !== null && (!Number.isInteger(seconds) || seconds < 1 || seconds > 30)) throw new Error("Bot-admin duration cap must be null or an integer from 1 to 30 seconds");
+    this.#reloadIfChanged();
+    if (seconds === null) delete this.#data.botEntranceDurationCaps[userId];
+    else this.#data.botEntranceDurationCaps[userId] = seconds;
+    this.#dirty = true; this.flush();
+  }
+
   guildEntranceSettings(guildId: string) { this.#reloadIfChanged(); return { ...(this.#data.guildEntrancePolicy[guildId] ?? {}) }; }
   setGuildEntranceSettings(guildId: string, patch: Record<string, unknown>): void {
     this.#reloadIfChanged(); const current = this.#data.guildEntrancePolicy[guildId] ?? {};

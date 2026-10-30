@@ -214,7 +214,7 @@ change `!import` had no permission check at all and `!entrance @user` relied on 
     !access whitelist on|off                 !access blacklist on|off
     !access allow|unallow server <id|here>   !access allow|unallow user <@user|id>
     !access block|unblock server <id|here>   !access block|unblock user <@user|id>
-    !access grant|revoke <@user|id> <dashboard|import|entrance.manage|logs>
+    !access grant|revoke <@user|id> <dashboard|import|entrance.manage|entrance.system|logs>
 
 Typical use: `!access whitelist on`, then `!access allow server here` in each server you trust; later `!access whitelist off` to go global again.
 

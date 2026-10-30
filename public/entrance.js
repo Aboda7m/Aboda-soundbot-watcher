@@ -185,13 +185,47 @@ async function clearEntrance() {
   }
 }
 
+async function renderGuildPreferences(guilds) {
+  const root = $("guild-preferences"); root.replaceChildren();
+  if (!guilds.length) { root.textContent = "No accessible servers are available."; return; }
+  for (const guild of guilds) {
+    const row = document.createElement("div"); row.className = "row";
+    const label = document.createElement("strong"); label.textContent = guild.name;
+    const detail = document.createElement("small");
+    const mode = document.createElement("select"); mode.setAttribute("aria-label", `Entrance preference for ${guild.name}`);
+    for (const [value, text] of [["inherit", "Inherit global"], ["sound", "Custom sound"], ["disabled", "Disabled"]]) mode.add(new Option(text, value));
+    const sound = document.createElement("select"); sound.setAttribute("aria-label", `Custom sound for ${guild.name}`);
+    sound.add(new Option("Choose a sound…", "")); for (const name of state.names) sound.add(new Option(name, name)); sound.hidden = true;
+    try { const pref = await api(`/api/entrance/settings?guildId=${encodeURIComponent(guild.id)}`); mode.value = pref.mode; sound.value = pref.guildSound || ""; sound.hidden = mode.value !== "sound";
+      const fmt = (v) => v == null ? "No cap" : `${v}s`;
+      duration.value = pref.guildPersonalDurationSec ?? "";
+      detail.textContent = `Preferred: ${fmt(pref.personalDurationSec)} · Server cap: ${fmt(pref.guildDurationSec)} · Bot-admin cap: ${fmt(pref.botAdminDurationSec)} · Effective: ${fmt(pref.effectiveDurationSec)}`; }
+    catch { mode.disabled = true; sound.disabled = true; }
+    mode.addEventListener("change", () => { sound.hidden = mode.value !== "sound"; });
+    const duration = document.createElement("input"); duration.type = "number"; duration.min = "1"; duration.max = "30"; duration.step = "1"; duration.placeholder = "Use global"; duration.setAttribute("aria-label", `Personal duration override for ${guild.name}`);
+    const save = document.createElement("button"); save.type = "button"; save.className = "btn"; save.textContent = "Save";
+    save.addEventListener("click", async () => {
+      try { if (mode.value === "sound" && !sound.value) throw new Error("Choose a sound first.");
+        const rawDuration = duration.value.trim(); const durationSec = rawDuration === "" ? null : Number(rawDuration);
+        if (durationSec !== null && (!Number.isInteger(durationSec) || durationSec < 1 || durationSec > 30)) throw new Error("Server-specific personal duration must be 1–30 seconds, or blank to inherit the global preference.");
+        await postJson("/api/entrance/preferences", { guildId: guild.id, mode: mode.value, ...(mode.value === "sound" ? { sound: sound.value } : {}) });
+        await postJson("/api/entrance/duration", { guildId: guild.id, durationSec });
+        banner(`${guild.name}: preference saved.`);
+      } catch (err) { banner(err.message); }
+    });
+    row.append(label, mode, sound, duration, save, detail); root.append(row);
+  }
+}
+
 async function init() {
   try {
-    const [me, sounds] = await Promise.all([api("/api/entrance"), api("/api/sounds")]);
+    const [me, sounds, guildData] = await Promise.all([api("/api/entrance"), api("/api/sounds"), api("/api/entrance/guilds")]);
     $("who").textContent = `Signed in as ${me.user.username}`;
     state.current = me.sound;
     state.exists = me.exists;
     state.names = sounds.sounds.map((s) => s.name);
+    $("duration").value = me.durationSec ?? "";
+    await renderGuildPreferences(guildData.guilds || []);
     renderCurrent();
     buildRows();
     $("search").disabled = false;
@@ -205,3 +239,10 @@ $("search").addEventListener("input", filter);
 $("clear").addEventListener("click", clearEntrance);
 $("current-play").addEventListener("click", () => preview($("current-play").dataset.preview));
 init();
+
+$("save-duration").addEventListener("click", async () => {
+  const raw = $("duration").value.trim(); const durationSec = raw === "" ? null : Number(raw);
+  if (durationSec !== null && (!Number.isInteger(durationSec) || durationSec < 1 || durationSec > 30)) { banner("Duration must be 1–30 seconds, or blank for no personal cap."); return; }
+  try { await postJson("/api/entrance/duration", { durationSec }); banner("Preferred duration saved."); }
+  catch (err) { banner(err.message); }
+});

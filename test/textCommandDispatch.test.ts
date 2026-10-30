@@ -577,7 +577,7 @@ test("!access: owner toggles whitelist/blacklist, manages lists and grants; repl
   assert.deepEqual(access.snapshot().grants[U], ["import", "entrance.manage"]);
   assert.match(await text(`!access revoke ${U} import`), /no longer has \*\*import\*\*/);
   assert.deepEqual(access.snapshot().grants[U], ["entrance.manage"]);
-  assert.match(await text(`!access grant ${U} administrator`), /Usage: .*dashboard\|import\|entrance.manage\|logs/);
+  assert.match(await text(`!access grant ${U} administrator`), /Usage: .*dashboard\|import\|entrance.manage\|entrance.system\|logs/);
   assert.match(await text("!access allow nonsense"), /server.*user/);
   assert.match(await text("!access frobnicate"), /Access control/);
 

@@ -18,6 +18,8 @@ async function init() {
       api("/api/sounds")
     ]);
     state.guilds = guildData.guilds || [];
+    const system = await api("/api/entrance/system/status");
+    $("system-admin").hidden = !system.allowed;
     state.sounds = (soundData.sounds || []).map(s => s.name);
     const select = $("guild");
     select.replaceChildren(new Option(state.guilds.length ? "Choose a server…" : "No servers you can administer", ""));
@@ -40,7 +42,13 @@ async function loadMembers(guildId) {
   $("status").textContent = "Loading members…";
   $("guild").disabled = true;
   try {
-    const data = await api(`/api/entrance/admin/members?guildId=${encodeURIComponent(guildId)}`);
+    const [data, policyData] = await Promise.all([
+      api(`/api/entrance/admin/members?guildId=${encodeURIComponent(guildId)}`),
+      api(`/api/entrance/admin/policy?guildId=${encodeURIComponent(guildId)}`)
+    ]);
+    $("guild-policy").hidden = false;
+    $("policy-enabled").checked = policyData.policy.enabled !== false;
+    $("policy-duration").value = policyData.policy.maxDurationSec ?? "";
     state.members = data.members || [];
     $("status").textContent = `${state.members.length} members loaded from ${data.guild.name}.`;
     renderMembers();
@@ -67,9 +75,14 @@ function renderMembers() {
     const info = document.createElement("div"); info.className = "name";
     const title = document.createElement("strong"); title.textContent = member.displayName || member.username;
     const detail = document.createElement("div"); detail.className = "assignment";
-    detail.textContent = member.sound
-      ? `${member.guildOverride ? "Server override" : "Personal sound"}: ${member.sound}${member.exists ? "" : " (file missing)"}`
-      : member.guildOverride ? "No sound in this server (personal sound suppressed)" : "No entrance sound assigned";
+    detail.textContent = member.adminMode === "suppressed"
+      ? "Administrator-suppressed in this server"
+      : member.adminMode === "assigned"
+        ? `Administrator-assigned: ${member.sound}${member.exists ? "" : " (file missing)"}`
+        : member.userMode === "disabled"
+          ? "Member disabled their entrance in this server"
+          : member.sound ? `${member.userMode === "sound" ? "Member's custom server sound" : "Member's global sound"}: ${member.sound}${member.exists ? "" : " (file missing)"}`
+            : "No entrance sound assigned";
     info.append(title, detail);
 
     const select = document.createElement("select"); select.setAttribute("aria-label", `Entrance sound for ${member.username}`);
@@ -88,16 +101,21 @@ function renderMembers() {
         await loadMembers(state.guildId);
       } catch (err) { showError(err.message); assign.disabled = false; }
     });
-    const clear = document.createElement("button"); clear.textContent = "Remove";
-    clear.disabled = !member.sound;
-    clear.addEventListener("click", async () => {
-      clear.disabled = true; showError("");
-      try {
-        await post("/api/entrance/admin/clear", { guildId: state.guildId, userId: member.id });
-        await loadMembers(state.guildId);
-      } catch (err) { showError(err.message); clear.disabled = false; }
+    const suppress = document.createElement("button"); suppress.textContent = "Suppress";
+    suppress.disabled = member.guildOverride && member.sound === null;
+    suppress.addEventListener("click", async () => {
+      suppress.disabled = true; showError("");
+      try { await post("/api/entrance/admin/clear", { guildId: state.guildId, userId: member.id }); await loadMembers(state.guildId); }
+      catch (err) { showError(err.message); suppress.disabled = false; }
     });
-    actions.append(assign, clear);
+    const release = document.createElement("button"); release.textContent = "Release override";
+    release.disabled = !member.guildOverride;
+    release.addEventListener("click", async () => {
+      release.disabled = true; showError("");
+      try { await post("/api/entrance/admin/release", { guildId: state.guildId, userId: member.id }); await loadMembers(state.guildId); }
+      catch (err) { showError(err.message); release.disabled = false; }
+    });
+    actions.append(assign, suppress, release);
     row.append(info, select, actions);
     root.append(row);
   }
@@ -105,3 +123,26 @@ function renderMembers() {
 
 $("guild").addEventListener("change", () => loadMembers($("guild").value));
 init();
+
+$("save-policy").addEventListener("click", async () => {
+  const raw = $("policy-duration").value.trim();
+  const duration = raw === "" ? null : Number(raw);
+  if (duration !== null && (!Number.isInteger(duration) || duration < 1 || duration > 30)) { showError("Duration must be 1–30 seconds, or blank for no cap."); return; }
+  try { await post("/api/entrance/admin/policy", { guildId: state.guildId, enabled: $("policy-enabled").checked, maxDurationSec: duration }); showError(""); }
+  catch (err) { showError(err.message); }
+});
+$("save-system").addEventListener("click", async () => {
+  const userId = $("system-user").value.trim(); const raw = $("system-duration").value.trim();
+  const durationSec = raw === "" ? null : Number(raw);
+  if (!/^\d{15,25}$/.test(userId)) { showError("Enter a valid Discord user ID."); return; }
+  if (durationSec !== null && (!Number.isInteger(durationSec) || durationSec < 1 || durationSec > 30)) { showError("Duration must be 1–30 seconds, or blank to remove."); return; }
+  try { await post("/api/entrance/system/user-duration", { userId, durationSec }); showError(""); }
+  catch (err) { showError(err.message); }
+});
+
+$("load-system").addEventListener("click", async () => {
+  const userId = $("system-user").value.trim();
+  if (!/^\d{15,25}$/.test(userId)) { showError("Enter a valid Discord user ID."); return; }
+  try { const data = await api(`/api/entrance/system/user-duration?userId=${encodeURIComponent(userId)}`); $("system-duration").value = data.durationSec ?? ""; showError(""); }
+  catch (err) { showError(err.message); }
+});

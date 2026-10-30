@@ -28,6 +28,17 @@
       </div>
     </section>
 
+    <section class="card" aria-labelledby="duration-title">
+      <h2 id="duration-title">Preferred automatic entrance duration</h2>
+      <p class="hint">Your preference is separate from server and bot administrator limits. Blank means no personal cap.</p>
+      <label class="field" for="duration"><span>Maximum seconds (1–30)</span><input id="duration" type="number" min="1" max="30" step="1"></label>
+      <button type="button" class="btn primary" id="save-duration">Save duration</button>
+    </section>
+    <section class="card" aria-labelledby="guild-title">
+      <h2 id="guild-title">Per-server preferences</h2>
+      <p class="hint">Inherit uses your global sound. Custom and disabled affect only that server.</p>
+      <div id="guild-preferences"></div>
+    </section>
     <section aria-labelledby="pick-title">
       <h2 id="pick-title">Choose a sound</h2>
       <label class="field" for="search">

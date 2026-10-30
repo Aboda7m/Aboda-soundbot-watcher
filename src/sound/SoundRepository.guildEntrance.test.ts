@@ -22,3 +22,28 @@ test("guild entrance overrides are isolated and clearing suppresses personal fal
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("bot-admin duration caps are independent and removable without changing personal or guild settings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "soundbot-entrance-cap-"));
+  const file = join(dir, "db.json");
+  try {
+    const repo = new SoundRepository(file, { countPlays: false });
+    const user = "222222222222222";
+    repo.setUserEntranceDuration(user, 10);
+    repo.setUserEntranceDuration(user, 8, "111111111111111");
+    assert.equal(repo.userGuildEntranceDuration(user, "111111111111111"), 8);
+    repo.setUserEntranceDuration(user, null, "111111111111111");
+    assert.equal(repo.userGuildEntranceDuration(user, "111111111111111"), undefined);
+    repo.setGuildEntranceSettings("111111111111111", { maxDurationSec: 5 });
+    repo.setBotEntranceDurationCap(user, 3);
+    assert.equal(repo.userEntranceDuration(user), 10);
+    assert.equal(repo.guildEntranceSettings("111111111111111").maxDurationSec, 5);
+    assert.equal(repo.botEntranceDurationCap(user), 3);
+    repo.setBotEntranceDurationCap(user, null);
+    assert.equal(repo.botEntranceDurationCap(user), undefined);
+    assert.equal(repo.userEntranceDuration(user), 10);
+    assert.equal(repo.guildEntranceSettings("111111111111111").maxDurationSec, 5);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

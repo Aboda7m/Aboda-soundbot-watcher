@@ -25,10 +25,10 @@ import { dirname } from "node:path";
  * overwritten or "repaired": at startup it is refused, while running the last good rules stay in force and changes
  * are refused until the file is fixed.
  */
-export const CAPABILITIES = ["dashboard", "import", "entrance.manage", "logs", "access.manage"] as const;
+export const CAPABILITIES = ["dashboard", "import", "entrance.manage", "entrance.system", "logs", "access.manage"] as const;
 
 /** Operational permissions included by the built-in Bot Admin preset. User-management stays opt-in. */
-export const ADMIN_CAPABILITIES: Capability[] = ["dashboard", "import", "entrance.manage", "logs"];
+export const ADMIN_CAPABILITIES: Capability[] = ["dashboard", "import", "entrance.manage", "entrance.system", "logs"];
 export type Capability = (typeof CAPABILITIES)[number];
 
 export const isCapability = (v: string): v is Capability => (CAPABILITIES as readonly string[]).includes(v);

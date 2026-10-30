@@ -20,6 +20,21 @@
       <select id="guild" disabled><option>Loading servers…</option></select>
       <p id="status" class="hint" role="status">Loading administration access…</p>
     </section>
+    <section class="card" id="guild-policy" hidden>
+      <h2>Automatic entrance policy for this server</h2>
+      <label><input id="policy-enabled" type="checkbox" checked> Allow automatic entrance sounds</label>
+      <label for="policy-duration">Maximum automatic duration (seconds; blank = no cap)</label>
+      <input id="policy-duration" type="number" min="1" max="30" step="1">
+      <button id="save-policy" type="button" class="primary">Save server policy</button>
+    </section>
+    <section class="card" id="system-admin" hidden>
+      <h2>Bot administrator · enforced user duration</h2>
+      <p class="hint">This is an enforced system restriction. It does not change the user's personal preference or the server's cap.</p>
+      <label for="system-user">Discord user ID</label><input id="system-user" inputmode="numeric" autocomplete="off">
+      <label for="system-duration">Maximum duration (seconds; blank = remove restriction)</label><input id="system-duration" type="number" min="1" max="30" step="1">
+      <button id="load-system" type="button">Load current restriction</button>
+      <button id="save-system" type="button" class="primary">Save enforced restriction</button>
+    </section>
     <section>
       <h2>Members and entrance sounds</h2>
       <p class="hint">Assignments use the bot's existing per-Discord-user entrance-sound setting.</p>

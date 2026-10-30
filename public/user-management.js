@@ -5,6 +5,7 @@ const LABELS = {
   dashboard: ["Dashboard access", "Sign in and use the soundboard."],
   import: ["Import sounds", "Add sounds to the shared sound library."],
   "entrance.manage": ["Manage other users' entrance sounds", "Assign or remove entrance sounds for other users."],
+  "entrance.system": ["System-wide entrance restrictions", "Enforce per-user automatic entrance duration caps that users and server admins cannot bypass."],
   logs: ["View logs", "Read sound-play and voice-activity logs."],
   "access.manage": ["Manage bot user permissions", "Manage other users, but only delegate permissions you already have."],
 };

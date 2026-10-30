@@ -12,6 +12,7 @@ import { createAuthorizer } from "./http/auth/authorize.ts";
 import { SessionStore } from "./http/auth/sessions.ts";
 import { ImportService } from "./import/ImportService.ts";
 import { createCooldown, planIntros, shouldPlayEntrance } from "./sound/introRules.ts";
+import { resolveAutomaticEntrance } from "./sound/entranceResolver.ts";
 import { SoundLibrary } from "./sound/SoundLibrary.ts";
 import { SoundQueue } from "./sound/SoundQueue.ts";
 import { SoundRepository } from "./sound/SoundRepository.ts";
@@ -60,10 +61,10 @@ const queue: SoundQueue = new SoundQueue({
   onStarted: (item) => {
     if (item.source !== "entrance") return;
     const t = now();
-    if (item.requestedBy?.userId) lastEntranceByUser.set(item.requestedBy.userId, t);
+    if (item.requestedBy?.userId) lastEntranceByUser.set(`${item.guildId}:${item.requestedBy.userId}`, t);
     lastEntranceByGuild.set(item.guildId, t);
   },
-  onFinished: (item) => { if (item.source === "entrance" && item.requestedBy?.userId) pendingEntranceUsers.delete(item.requestedBy.userId); },
+  onFinished: (item) => { if (item.source === "entrance" && item.requestedBy?.userId) pendingEntranceUsers.delete(`${item.guildId}:${item.requestedBy.userId}`); },
   onChange: () => watcher.schedule(),
   log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
 });
@@ -136,11 +137,17 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     // but only run entrance policy for a join from outside voice (including reconnects).
     if (!shouldPlayEntrance(move)) return;
     const policy = repo.guildEntranceSettings(move.guildId);
-    if (policy.enabled === false) return;
-    const adminAssignment = repo.guildEntranceAssignment(move.userId, move.guildId);
-    const userGuildPreference = repo.userGuildEntrance(move.userId, move.guildId);
-    const selectedSound = adminAssignment !== undefined ? adminAssignment : userGuildPreference !== undefined ? userGuildPreference : repo.entrance(move.userId);
-    if (!selectedSound || !library.has(selectedSound)) return;
+    const resolution = resolveAutomaticEntrance({
+      guildEnabled: policy.enabled,
+      adminAssignment: repo.guildEntranceAssignment(move.userId, move.guildId),
+      userGuildPreference: repo.userGuildEntrance(move.userId, move.guildId),
+      globalPreference: repo.entrance(move.userId),
+      personalDurationSec: repo.userEntranceDuration(move.userId, move.guildId),
+      guildDurationSec: policy.maxDurationSec,
+      botAdminDurationSec: repo.botEntranceDurationCap(move.userId),
+    });
+    const selectedSound = resolution.sound;
+    if (!resolution.allowed || !selectedSound || !library.has(selectedSound)) return;
 
     const personalTiming = policy.allowUserTiming === false ? {} : repo.userEntranceTiming(move.userId, move.guildId);
     const configuredGrace = policy.reconnectGraceSec === undefined ? GLOBAL_RECONNECT_GRACE_SEC : policy.reconnectGraceSec;
@@ -157,21 +164,18 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     const enforcedCooldown = policy.enforcedUserCooldownSec ?? 0;
     const requestedCooldown = policy.allowUserCooldown === false ? undefined : personalTiming.cooldownSec;
     const effectiveUserCooldown = Math.max(enforcedCooldown, requestedCooldown === undefined ? userCooldownDefault : requestedCooldown ?? 0);
-    const key = move.userId;
+    const key = `${move.guildId}:${move.userId}`;
     const t = now();
     if (pendingEntranceUsers.has(key)) return;
-    const lastUser = lastEntranceByUser.get(move.userId);
+    const lastUser = lastEntranceByUser.get(`${move.guildId}:${move.userId}`);
     if (lastUser !== undefined && t - lastUser < effectiveUserCooldown * 1000) return;
     const guildCooldown = policy.guildCooldownSec ?? 0;
     const lastGuild = lastEntranceByGuild.get(move.guildId);
     if (guildCooldown > 0 && lastGuild !== undefined && t - lastGuild < guildCooldown * 1000) return;
 
-    const personalDuration = repo.userEntranceDuration(move.userId, move.guildId);
-    const guildDuration = policy.maxDurationSec;
-    const caps = [personalDuration, guildDuration].filter((v): v is number => Number.isInteger(v) && v !== null);
     pendingEntranceUsers.add(key);
     const result = queue.enqueue({ sound: selectedSound, guildId: move.guildId, channelId: move.toChannelId, source: "entrance",
-      maxDurationSec: caps.length ? Math.min(...caps) : undefined,
+      maxDurationSec: resolution.maxDurationSec,
       requestedBy: { userId: move.userId, username: newState.member?.user?.tag ?? newState.member?.user?.username ?? null } });
     if (!result.ok) pendingEntranceUsers.delete(key);
   } catch (err) {

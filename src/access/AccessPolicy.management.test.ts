@@ -6,7 +6,7 @@ const OWNER = "111111111111111";
 const USER = "222222222222222";
 
 test("Bot Admin preset contains all operational capabilities but not user-management permission", () => {
-  assert.deepEqual(ADMIN_CAPABILITIES, ["dashboard", "import", "entrance.manage", "logs"]);
+  assert.deepEqual(ADMIN_CAPABILITIES, ["dashboard", "import", "entrance.manage", "entrance.system", "logs"]);
   assert.ok(CAPABILITIES.includes("access.manage"));
   assert.ok(!ADMIN_CAPABILITIES.includes("access.manage" as never));
 });
