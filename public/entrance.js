@@ -194,15 +194,38 @@ async function renderGuildPreferences(guilds) {
     const detail = document.createElement("small");
     const mode = document.createElement("select"); mode.setAttribute("aria-label", `Entrance preference for ${guild.name}`);
     for (const [value, text] of [["inherit", "Inherit global"], ["sound", "Custom sound"], ["disabled", "Disabled"]]) mode.add(new Option(text, value));
+    
     const sound = document.createElement("select"); sound.setAttribute("aria-label", `Custom sound for ${guild.name}`);
     sound.add(new Option("Choose a sound…", "")); for (const name of state.names) sound.add(new Option(name, name)); sound.hidden = true;
-    try { const pref = await api(`/api/entrance/settings?guildId=${encodeURIComponent(guild.id)}`); mode.value = pref.mode; sound.value = pref.guildSound || ""; sound.hidden = mode.value !== "sound";
+
+    const duration = document.createElement("input");
+    duration.type = "number";
+    duration.min = "1";
+    duration.max = "30";
+    duration.step = "1";
+    duration.placeholder = "Use global";
+    duration.setAttribute("aria-label", `Personal duration override for ${guild.name}`);
+
+    try {
+      const pref = await api(`/api/entrance/settings?guildId=${encodeURIComponent(guild.id)}`);
+      mode.value = pref.mode;
+      sound.value = pref.guildSound || "";
+      sound.hidden = mode.value !== "sound";
+
       const fmt = (v) => v == null ? "No cap" : `${v}s`;
       duration.value = pref.guildPersonalDurationSec ?? "";
-      detail.textContent = `Preferred: ${fmt(pref.personalDurationSec)} · Server cap: ${fmt(pref.guildDurationSec)} · Bot-admin cap: ${fmt(pref.botAdminDurationSec)} · Effective: ${fmt(pref.effectiveDurationSec)}`; }
-    catch { mode.disabled = true; sound.disabled = true; }
-    mode.addEventListener("change", () => { sound.hidden = mode.value !== "sound"; });
-    const duration = document.createElement("input"); duration.type = "number"; duration.min = "1"; duration.max = "30"; duration.step = "1"; duration.placeholder = "Use global"; duration.setAttribute("aria-label", `Personal duration override for ${guild.name}`);
+
+      detail.textContent = `Preferred: ${fmt(pref.personalDurationSec)} · Server cap: ${fmt(pref.guildDurationSec)} · Bot-admin cap: ${fmt(pref.botAdminDurationSec)} · Effective: ${fmt(pref.effectiveDurationSec)}`;
+    } catch (err) {
+      mode.disabled = true;
+      sound.disabled = true;
+      detail.textContent = `Could not load settings: ${err.message}`;
+    }
+
+    mode.addEventListener("change", () => {
+      sound.hidden = mode.value !== "sound";
+    });
+
     const save = document.createElement("button"); save.type = "button"; save.className = "btn"; save.textContent = "Save";
     save.addEventListener("click", async () => {
       try { if (mode.value === "sound" && !sound.value) throw new Error("Choose a sound first.");
