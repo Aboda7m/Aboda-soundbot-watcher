@@ -104,7 +104,7 @@ export class WatchManager {
       case "media": {
         const url = String(command.url ?? "").trim();
         let parsed: URL; try { parsed = new URL(url); } catch { throw new Error("Enter a valid video URL."); }
-        if (!(["https:", "http:"].includes(parsed.protocol))) throw new Error("Only HTTP and HTTPS media URLs are supported.");
+        if (parsed.protocol !== "https:") throw new Error("Only HTTPS media URLs are supported (browsers block http video on an https page).");
         if (parsed.username || parsed.password) throw new Error("Media URLs must not contain embedded credentials.");
         const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
         if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".lan") || host.endsWith(".internal")) throw new Error("Local-network media URLs are not allowed. Use a public HTTPS media URL.");

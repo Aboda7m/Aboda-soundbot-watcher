@@ -6,7 +6,7 @@ let lastYtPosition = null, lastYtAt = 0, ytSeekSuppressUntil = 0;
 let pollTimer = null;
 const fmt = (n) => { n = Math.max(0, Math.floor(Number(n) || 0)); return `${Math.floor(n/60)}:${String(n%60).padStart(2,"0")}`; };
 async function api(url, options = {}) {
-  const r = await fetch(url, { credentials:"same-origin", ...options, headers:{ ...(options.body ? {"Content-Type":"application/json"}:{}), ...(options.headers||{}) } });
+  let r; try { r = await fetch(url, { credentials:"same-origin", signal: AbortSignal.timeout(10000), ...options, headers:{ ...(options.body ? {"Content-Type":"application/json"}:{}), ...(options.headers||{}) } }); } catch (e) { throw new Error(e && e.name === "TimeoutError" ? "Server did not respond (timed out). Check the tunnel / Cloudflare rules for /api/watch/*." : (e && e.message) || "Network error"); }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
   return data;
@@ -56,7 +56,7 @@ async function loadMedia(media) {
   if (!media) { video.removeAttribute("src"); video.load(); $("empty-player").hidden = false; applying = false; return; }
   if (media.kind === "youtube" && media.youtubeId) {
     $("youtube-player").hidden = false; await ensureYoutube();
-    ytPlayer = new YT.Player("youtube-player", { videoId:media.youtubeId, width:"100%", height:"100%", playerVars:{playsinline:1,rel:0,enablejsapi:1,origin:window.location.origin}, events:{ onReady:() => { applying=false; if(lastState) applyPlayback(lastState.playback); }, onStateChange:(e) => { if(applying || !active) return; if(e.data === YT.PlayerState.PLAYING) send("play"); else if(e.data === YT.PlayerState.PAUSED) send("pause"); }, onPlaybackRateChange:(e) => { if(!applying && active) send("rate",{rate:Number(e.data)}); }, onAutoplayBlocked:() => { $("enable-playback").hidden=false; } } });
+    ytPlayer = new YT.Player("youtube-player", { videoId:media.youtubeId, width:"100%", height:"100%", playerVars:{playsinline:1,rel:0,enablejsapi:1,origin:window.location.origin}, events:{ onReady:() => { applying=false; if(lastState) applyPlayback(lastState.playback); }, onStateChange:(e) => { if(applying || !active) return; if(e.data === YT.PlayerState.PLAYING) send("play"); else if(e.data === YT.PlayerState.PAUSED) send("pause"); }, onPlaybackRateChange:(e) => { if(!applying && active) send("rate",{rate:Number(e.data)}); }, onAutoplayBlocked:() => { $("enable-playback").hidden=false; }, onError:(e) => { $("source-error").textContent = `YouTube could not play this video (error ${e.data}). It may block embedding, be private, or be age-restricted.`; applying=false; } } });
   } else {
     video.hidden = false; video.controls = true; video.src = media.url; video.load();
     video.onloadedmetadata = () => { applying=false; if(lastState) applyPlayback(lastState.playback); };
@@ -99,16 +99,17 @@ async function refreshRooms() {
       if (active) { applying=true; try { video.pause(); video.removeAttribute("src"); video.load(); if(ytPlayer) ytPlayer.destroy(); } catch {} ytPlayer=null; sourceKey=""; applying=false; }
       active = null; $("video").hidden=true; $("youtube-player").hidden=true; $("empty-player").hidden=false;
       $("room-title").textContent = "Join a Discord voice channel"; $("room-subtitle").textContent = "Once you join, this page automatically opens that channel's watch session.";
-      $("room-select").hidden = true; $("participants").textContent = "Waiting for you to join voice…"; $("member-count").textContent="0"; return;
+      $("room-select").hidden = true; $("participants").textContent = "Waiting for you to join voice…"; $("member-count").textContent="0";
+      setConnected(false, "Not in a voice channel"); return;
     }
     const select = $("room-select"); select.hidden = rooms.length < 2; select.replaceChildren();
     for (const r of rooms) { const o = document.createElement("option"); o.value = `${r.guildId}:${r.channelId}`; o.textContent = `${r.guildName} / ${r.channelName}`; select.append(o); }
     const current = rooms.find(r => active && r.guildId===active.guildId && r.channelId===active.channelId) || rooms[0];
-    select.value = `${current.guildId}:${current.channelId}`; chooseRoom(current);
+    select.value = `${current.guildId}:${current.channelId}`; if (!eventSource) setConnected(true, "Connected"); chooseRoom(current);
   } catch(e) { setConnected(false,e.message); }
 }
 $("room-select").addEventListener("change", () => { const r=rooms.find(x=>`${x.guildId}:${x.channelId}`===$("room-select").value); if(r) chooseRoom(r); });
-$("source-form").addEventListener("submit", async (e) => { e.preventDefault(); $("source-error").textContent=""; if(!active) return; const url=$("video-url").value.trim(); await send("media",{url}); });
+$("source-form").addEventListener("submit", async (e) => { e.preventDefault(); $("source-error").textContent=""; if(!active){ $("source-error").textContent="Join a Discord voice channel first (the bot must see you in voice), then try again."; return; } const url=$("video-url").value.trim(); if(/^http:\/\//i.test(url)){ $("source-error").textContent="Only HTTPS video URLs work (browsers block http on an https page)."; return; } await send("media",{url}); });
 $("play").addEventListener("click",()=>send("play")); $("pause").addEventListener("click",()=>send("pause"));
 $("enable-playback").addEventListener("click", async () => {
   try {

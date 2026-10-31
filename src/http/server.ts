@@ -423,6 +423,8 @@ export function createPublicServer(d: PublicDeps): Server {
         return void res
           .writeHead(200, {
             ...SECURITY_HEADERS,
+            // YouTube embeds fail (error 153) without a referrer, so /watch sends the origin.
+            ...(url.pathname === "/watch" ? { "Referrer-Policy": "strict-origin-when-cross-origin" } : {}),
             ...(file.csp ? { "Content-Security-Policy": file.csp } : {}),
             "Content-Type": file.type,
           })
