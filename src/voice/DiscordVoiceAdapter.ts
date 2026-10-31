@@ -23,6 +23,7 @@ interface GuildVoice {
 }
 
 export interface DiscordVoiceAdapterOptions {
+  group?: string;
   /**
    * True while something else (an active recording) needs this guild's voice connection: playback must then
    * never destroy it, move it to another channel, or re-join it deafened. Default: a recording is active.
@@ -34,10 +35,12 @@ export interface DiscordVoiceAdapterOptions {
 export class DiscordVoiceAdapter implements VoicePort {
   #client: Client;
   #isPinned: (guildId: string) => boolean;
+  #group: string;
   #guilds = new Map<string, GuildVoice>();
 
   constructor(client: Client, options: DiscordVoiceAdapterOptions = {}) {
     this.#client = client;
+    this.#group = options.group ?? client.user?.id ?? "voice-main";
     this.#isPinned = options.isPinned ?? ((guildId) => recordingManager.isRecording(guildId));
   }
 
@@ -88,13 +91,28 @@ export class DiscordVoiceAdapter implements VoicePort {
     });
   }
 
-  stop(guildId: string) {
-    this.#guilds.get(guildId)?.player.stop(true);
+  stop(guildId: string, channelId?: string) {
+    const gv = this.#guilds.get(guildId);
+    if (!channelId || gv?.channelId === channelId) gv?.player.stop(true);
+  }
+
+  canServe(guildId: string): boolean {
+    return !!this.#client.isReady() && this.#client.guilds.cache.has(guildId);
+  }
+
+  channelOf(guildId: string): string | null {
+    const gv = this.#guilds.get(guildId);
+    return gv && gv.connection.state.status !== VoiceConnectionStatus.Destroyed ? gv.channelId : null;
+  }
+
+  async connect(guildId: string, channelId: string): Promise<VoiceConnection> {
+    return (await this.#ensure(guildId, channelId, true)).connection;
   }
 
   /** Playback is done with this guild. Does nothing while a recording still needs the connection. */
-  leave(guildId: string) {
+  leave(guildId: string, channelId?: string) {
     if (this.#isPinned(guildId)) return;
+    if (channelId && this.#guilds.get(guildId)?.channelId !== channelId) return;
     this.#destroy(guildId);
   }
 
@@ -109,7 +127,7 @@ export class DiscordVoiceAdapter implements VoicePort {
     this.#guilds.delete(guildId);
   }
 
-  async #ensure(guildId: string, channelId: string): Promise<GuildVoice> {
+  async #ensure(guildId: string, channelId: string, listening = false): Promise<GuildVoice> {
     const guild = this.#client.guilds.cache.get(guildId);
     if (!guild) throw new Error(`Guild ${guildId} is not available`);
 
@@ -120,7 +138,7 @@ export class DiscordVoiceAdapter implements VoicePort {
 
     // A recording owns the connection: never move it to another channel for a sound.
     const pinned = this.#isPinned(guildId);
-    const live = pinned ? getVoiceConnection(guildId) : undefined;
+    const live = pinned ? getVoiceConnection(guildId, this.#group) : undefined;
     if (live && live.joinConfig.channelId !== channelId)
       throw new Error(`A recording is active in another voice channel of this server; cannot play in "${channel.name}"`);
 
@@ -137,7 +155,8 @@ export class DiscordVoiceAdapter implements VoicePort {
         channelId,
         adapterCreator: guild.voiceAdapterCreator,
         // Re-joining an existing (recording) connection sends these options again; a deafened bot receives no audio.
-        selfDeaf: !pinned,
+        selfDeaf: false,
+        group: this.#group,
       });
       gv = { connection, player, channelId };
       this.#guilds.set(guildId, gv);

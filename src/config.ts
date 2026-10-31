@@ -4,6 +4,7 @@ import { isLoopbackHost } from "./http/common.ts";
 
 export interface Config {
   token: string;
+  voiceWorkerTokens: string[];
   /** PUBLIC dashboard listener (the Cloudflare Tunnel origin). Authenticates with Discord OAuth2 only. */
   publicPort: number;
   publicHost: string;
@@ -95,6 +96,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const localKey = env.LOCAL_ACCESS_KEY?.trim() || env.ACCESS_KEY?.trim() || "";
   return {
     token: env.DISCORD_TOKEN ?? "",
+    voiceWorkerTokens: [env.VOICE_WORKER_1_TOKEN, env.VOICE_WORKER_2_TOKEN].map((v) => v?.trim() ?? "").filter(Boolean),
     publicPort: num(env.PORT, 3939),
     publicHost: pub.host,
     ignoredLegacyHost: pub.ignored,

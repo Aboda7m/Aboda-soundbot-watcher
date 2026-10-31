@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "scheduler": {
+    "waitMs": 60000,
+    "recordingPreferredWorker": "worker-2"
+  },
+  "workerRoles": {
+    "worker-1": "extra-channel-playback",
+    "worker-2": "recording-preferred"
+  },
+  "sameChannelPlayback": {
+    "mode": "serial",
+    "note": "True simultaneous entrance mixing is not implemented in this build. One voice connection currently plays one sound at a time."
+  }
+}

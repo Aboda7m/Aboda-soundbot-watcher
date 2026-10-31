@@ -1,20 +1,17 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  entersState,
-  getVoiceConnection,
-  joinVoiceChannel,
-  VoiceConnectionStatus,
-} from "@discordjs/voice";
+import { entersState, VoiceConnectionStatus } from "@discordjs/voice";
 import { ChannelType, type Message } from "discord.js";
 import { recordingManager } from "../../recording/RecordingManager.ts";
 import { RecordingPermissions } from "../../recording/RecordingPermissions.ts";
 import { defineTextCommand } from "../commandTypes.ts";
+import type { RecordingLease } from "../../voice/VoiceHub.ts";
 import { say } from "../commandUtils.ts";
 
 type RecordCommand = { sub: "start" | "stop" | "status" | "list" | "usage" };
 
 const SUBS = ["start", "stop", "status", "list"] as const;
+const leases = new Map<string, RecordingLease>();
 
 /** Newest session ids (folder names sort by timestamp) for one guild. */
 async function listSessions(guildId: string, limit: number): Promise<string[]> {
@@ -75,24 +72,14 @@ export default defineTextCommand({
           await say(message, `A recording is already active in this server. Use \`${p}record status\`.`);
           return;
         }
-        const me = voiceChannel.permissionsFor(msg.client.user);
-        if (!me?.has(["Connect", "ViewChannel"])) {
-          await say(message, "I can't connect to your voice channel (need View Channel + Connect).");
+        let lease: RecordingLease;
+        try {
+          lease = await deps.voiceHub.leaseRecording(guildId, voiceChannel.id);
+        } catch (err) {
+          await say(message, `Could not allocate a recording bot: ${(err as Error).message}`);
           return;
         }
-        const existing = getVoiceConnection(guildId);
-        if (existing && existing.joinConfig.channelId !== voiceChannel.id) {
-          await say(message, "I'm busy in another voice channel right now. Try again once I've left it.");
-          return;
-        }
-
-        const connection = joinVoiceChannel({
-          channelId: voiceChannel.id,
-          guildId,
-          adapterCreator: msg.guild.voiceAdapterCreator,
-          selfDeaf: false, // must be false or Discord sends no audio to the bot
-          selfMute: false, // same as the playback connection: this call may re-join one that is playing a sound
-        });
+        const connection = lease.connection;
 
         try {
           await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
@@ -103,9 +90,11 @@ export default defineTextCommand({
             resolveUserName: (id) => msg.guild.members.cache.get(id)?.displayName ?? msg.client.users.cache.get(id)?.username,
           });
           if (!session) {
+            deps.voiceHub.releaseRecording(guildId, voiceChannel.id, lease.slotId);
             await say(message, "A recording is already active in this server.");
             return;
           }
+          leases.set(guildId, lease);
 
           // If the bot gets kicked/moved and cannot reconnect, save what we have.
           connection.on(VoiceConnectionStatus.Disconnected, async () => {
@@ -117,6 +106,8 @@ export default defineTextCommand({
             } catch {
               if (recordingManager.getSession(guildId) === session) {
                 await recordingManager.stopSession(guildId, true);
+                deps.voiceHub.releaseRecording(guildId, voiceChannel.id, lease.slotId);
+                leases.delete(guildId);
                 await msg.channel.send(`⚠️ Recording \`${session.sessionId}\` was interrupted (disconnected). What was captured is saved.`).catch(() => {});
               }
               if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
@@ -130,7 +121,8 @@ export default defineTextCommand({
         } catch (err) {
           console.error("record start failed:", err);
           await recordingManager.stopSession(guildId, true).catch(() => {});
-          if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+          deps.voiceHub.releaseRecording(guildId, voiceChannel.id, lease.slotId);
+          leases.delete(guildId);
           await say(message, "Could not start recording (failed to join the voice channel in time).");
         }
         return;
@@ -144,9 +136,9 @@ export default defineTextCommand({
         }
         // stopSession resolved, so every file is fully flushed: only now may the connection go. If sounds are
         // still playing or queued the queue's own idle-leave (now allowed, the recording is over) closes it.
-        const soundsActive = deps.queue.status().some((s) => s.guildId === guildId);
-        const connection = getVoiceConnection(guildId);
-        if (!soundsActive && connection && connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+        const lease = leases.get(guildId);
+        if (lease) deps.voiceHub.releaseRecording(guildId, session.channelId, lease.slotId);
+        leases.delete(guildId);
         await say(message, `⏹️ Recording saved.\nSession: \`${session.sessionId}\`\nDuration: ${session.durationSeconds}s`);
         return;
       }

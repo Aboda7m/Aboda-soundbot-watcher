@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkNetworkConfig, loadConfig } from "./config.ts";
 import { createClient, toVoiceMove } from "./discord/client.ts";
+import { VoiceHub } from "./voice/VoiceHub.ts";
+import { loadVoicePoolConfig } from "./voice/voicePoolConfig.ts";
 import { registerTextCommands } from "./discord/textCommands.ts";
 import { createPublicServer } from "./http/server.ts";
 import { recordingManager } from "./recording/RecordingManager.ts";
@@ -37,6 +39,17 @@ if (net.errors.length) {
 }
 
 const client = createClient();
+const workerClients = config.voiceWorkerTokens.map(() => createClient(true));
+const voicePoolConfig = loadVoicePoolConfig();
+const voiceHub = new VoiceHub({ waitMs: voicePoolConfig.scheduler.waitMs, recordingPreferredWorker: voicePoolConfig.scheduler.recordingPreferredWorker });
+const mainVoice = new DiscordVoiceAdapter(client, { group: "main", isPinned: () => false });
+voiceHub.addSlot({ id: "main", label: "Main bot", worker: false, adapter: mainVoice, identity: () => client.user ? { id: client.user.id, tag: client.user.tag } : null });
+workerClients.forEach((worker, index) => {
+  const id = `worker-${index + 1}`;
+  const adapter = new DiscordVoiceAdapter(worker, { group: id, isPinned: () => false });
+  voiceHub.addSlot({ id, label: `Worker ${index + 1}`, worker: true, adapter, identity: () => worker.user ? { id: worker.user.id, tag: worker.user.tag } : null });
+  worker.on(Events.Error, (err) => console.error(`[${id}] Discord client error:`, err.message));
+});
 const library = new SoundLibrary(config.soundsDir, config.acceptedExtensions);
 
 let repo: SoundRepository;
@@ -48,7 +61,7 @@ try {
   process.exit(1);
 }
 
-const voice = new DiscordVoiceAdapter(client);
+const voice = voiceHub;
 const watcher = new Watcher(client, {
   hideBots: config.hideBots,
   extra: () => ({ playing: queue.status() }),
@@ -203,7 +216,7 @@ const importer = config.importEnabled
   : undefined;
 
 try {
-  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo, access });
+  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo, access, voiceHub });
 } catch (err) {
   console.error(`Refusing to start: ${(err as Error).message}`);
   console.error("Fix the files in src/discord/commands/ and start again.");
@@ -396,14 +409,24 @@ async function shutdown(signal: string) {
   sessions.close();
   localSessions.close();
   importer?.close();
-  await client.destroy();
+  await Promise.allSettled([...workerClients.map((worker) => worker.destroy()), client.destroy()]);
   process.exit(0);
 }
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", err));
 
-client.login(config.token).catch((err: Error) => {
+client.login(config.token).then(async () => {
+  await Promise.all(workerClients.map(async (worker, index) => {
+    try {
+      await worker.login(config.voiceWorkerTokens[index]!);
+      console.log(`[voice worker ${index + 1}] logged in as ${worker.user?.tag ?? "unknown"}`);
+    } catch (err) {
+      console.error(`[voice worker ${index + 1}] login failed; continuing without this worker:`, (err as Error).message);
+      await worker.destroy().catch(() => {});
+    }
+  }));
+}).catch((err: Error) => {
   console.error("Discord login failed:", err.message);
   process.exit(1);
 });

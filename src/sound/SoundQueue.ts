@@ -33,6 +33,7 @@ export type EnqueueResult =
 
 export interface GuildPlayback {
   guildId: string;
+  channelId: string;
   current: QueueItem | null;
   queued: number;
   items: QueueItem[];
@@ -60,7 +61,7 @@ interface GuildState {
 }
 
 /**
- * Serialises playback: one sound at a time per guild, different guilds in parallel.
+ * Serialises playback per voice channel. Different channels, including channels in the same guild, run independently.
  * A failing sound is logged and skipped; it never blocks the queue or crashes the process.
  */
 export class SoundQueue {
@@ -81,7 +82,8 @@ export class SoundQueue {
       return { ok: false, reason: "unknown-sound" };
     }
 
-    const g = this.#state(req.guildId);
+    const key = this.#key(req.guildId, req.channelId);
+    const g = this.#state(req.guildId, req.channelId);
 
     if (
       g.items.some(
@@ -108,7 +110,7 @@ export class SoundQueue {
     this.#d.onChange?.();
 
     if (!g.running) {
-      void this.#pump(req.guildId, g);
+      void this.#pump(key, req.guildId, req.channelId, g);
     }
 
     return { ok: true, position };
@@ -121,57 +123,59 @@ export class SoundQueue {
 
   /** Stop the current sound, if one is actually playing. */
   skipCurrent(guildId: string): boolean {
-    const g = this.#guilds.get(guildId);
+    const g = [...this.#guilds.entries()].find(([key, state]) => key.startsWith(`${guildId}:`) && state.current)?.[1];
 
     if (!g?.current) {
       return false;
     }
 
-    this.#d.voice.stop(guildId);
+    this.#d.voice.stop(guildId, g.current.channelId);
     return true;
   }
 
   /** Remove one pending item. The currently playing sound cannot be removed this way. */
   removeQueued(guildId: string, id: string): boolean {
-    const g = this.#guilds.get(guildId);
-    if (!g) return false;
-
-    const index = g.items.findIndex((item) => item.id === id);
-    if (index === -1) return false;
-
-    const [removed] = g.items.splice(index, 1);
-    if (removed) this.#d.onFinished?.(removed, false);
-    this.#d.onChange?.();
-
-    return true;
+    for (const [key, g] of this.#guilds) {
+      if (!key.startsWith(`${guildId}:`)) continue;
+      const index = g.items.findIndex((item) => item.id === id);
+      if (index === -1) continue;
+      const [removed] = g.items.splice(index, 1);
+      if (removed) this.#d.onFinished?.(removed, false);
+      this.#d.onChange?.();
+      return true;
+    }
+    return false;
   }
 
   /** Remove all pending items without interrupting the current sound. */
   clearPending(guildId: string): void {
-    const g = this.#guilds.get(guildId);
-    if (!g || g.items.length === 0) return;
-
-    for (const item of g.items.splice(0)) this.#d.onFinished?.(item, false);
-    this.#d.onChange?.();
+    let changed = false;
+    for (const [key, g] of this.#guilds) {
+      if (!key.startsWith(`${guildId}:`) || g.items.length === 0) continue;
+      for (const item of g.items.splice(0)) this.#d.onFinished?.(item, false);
+      changed = true;
+    }
+    if (changed) this.#d.onChange?.();
   }
 
   /** Drop everything waiting and stop the current sound. */
   clear(guildId: string): void {
-    const g = this.#guilds.get(guildId);
-    if (!g) return;
-
-    for (const item of g.items.splice(0)) this.#d.onFinished?.(item, false);
-    this.#d.voice.stop(guildId);
+    for (const [key, g] of this.#guilds) {
+      if (!key.startsWith(`${guildId}:`)) continue;
+      for (const item of g.items.splice(0)) this.#d.onFinished?.(item, false);
+      if (g.current) this.#d.voice.stop(guildId, g.current.channelId);
+    }
     this.#d.onChange?.();
   }
 
   status(): GuildPlayback[] {
     const out: GuildPlayback[] = [];
 
-    for (const [guildId, g] of this.#guilds) {
+    for (const g of this.#guilds.values()) {
       if (g.current || g.items.length) {
         out.push({
-          guildId,
+          guildId: g.current?.guildId ?? g.items[0]!.guildId,
+          channelId: g.current?.channelId ?? g.items[0]!.channelId,
           current: g.current,
           queued: g.items.length,
           items: [...g.items],
@@ -185,7 +189,8 @@ export class SoundQueue {
   shutdown(): void {
     this.#closed = true;
 
-    for (const [guildId, g] of this.#guilds) {
+    for (const [key, g] of this.#guilds) {
+      const guildId = g.current?.guildId ?? g.items[0]?.guildId ?? key.split(":", 1)[0]!;
       for (const item of g.items.splice(0)) this.#d.onFinished?.(item, false);
 
       if (g.idleTimer) {
@@ -199,8 +204,11 @@ export class SoundQueue {
     this.#d.voice.destroyAll();
   }
 
-  #state(guildId: string): GuildState {
-    let g = this.#guilds.get(guildId);
+  #key(guildId: string, channelId: string): string { return `${guildId}:${channelId}`; }
+
+  #state(guildId: string, channelId: string): GuildState {
+    const key = this.#key(guildId, channelId);
+    let g = this.#guilds.get(key);
 
     if (!g) {
       g = {
@@ -210,13 +218,13 @@ export class SoundQueue {
         idleTimer: null,
       };
 
-      this.#guilds.set(guildId, g);
+      this.#guilds.set(key, g);
     }
 
     return g;
   }
 
-  async #pump(guildId: string, g: GuildState): Promise<void> {
+  async #pump(key: string, guildId: string, channelId: string, g: GuildState): Promise<void> {
     g.running = true;
 
     try {
@@ -252,7 +260,7 @@ export class SoundQueue {
       g.running = false;
 
       if (!this.#closed) {
-        this.#scheduleLeave(guildId, g);
+        this.#scheduleLeave(guildId, channelId, g);
       }
     }
   }
@@ -287,14 +295,14 @@ export class SoundQueue {
     }
   }
 
-  #scheduleLeave(guildId: string, g: GuildState): void {
+  #scheduleLeave(guildId: string, channelId: string, g: GuildState): void {
     if (g.items.length > 0) return;
 
     const leave = () => {
       g.idleTimer = null;
 
       if (!g.running && g.items.length === 0) {
-        this.#d.voice.leave(guildId);
+        this.#d.voice.leave(guildId, channelId);
       }
     };
 

@@ -10,6 +10,7 @@ import type { ImportService } from "../import/ImportService.ts";
 import type { SoundLibrary } from "../sound/SoundLibrary.ts";
 import type { SoundQueue } from "../sound/SoundQueue.ts";
 import type { SoundRepository } from "../sound/SoundRepository.ts";
+import type { VoiceHub } from "../voice/VoiceHub.ts";
 
 /** The small slice of a discord.js Message the simple handlers use. */
 export interface CommandMessage {
@@ -68,6 +69,7 @@ export interface CommandDeps {
   repo?: SoundRepository;
   /** Who may use the bot and who holds which permission. Decided by user id, never by Discord permissions. */
   access: AccessPolicy;
+  voiceHub: VoiceHub;
 }
 
 /** Everything `execute` receives. Only messages from a guild (server) channel reach a command. */

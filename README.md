@@ -376,3 +376,24 @@ The bot carries its own pinned `yt-dlp` so nothing has to be installed globally.
 - **Windows:** if it will not start, install the Microsoft Visual C++ 2015-2022 Redistributable (x64) and check that antivirus did not quarantine the file.
 - **For later:** run it with `--ignore-config` (a `yt-dlp.conf` next to the binary is otherwise loaded). YouTube also needs a JavaScript runtime for yt-dlp; only `deno` is enabled by default, Node can be enabled with `--js-runtimes node`.
 - **License:** yt-dlp is Unlicense, but the standalone `.exe` bundles GPLv3+ code. That is why the binary is downloaded from the official release instead of being committed to the repository.
+
+## Additional voice workers
+
+The main bot remains the command/dashboard bot. Up to two optional worker bot accounts can provide additional voice connections, allowing separate voice channels in the same Discord server to play independently.
+
+1. Create two additional Discord bot applications and copy their bot tokens.
+2. Append these lines to your local `.env` (do not commit the file):
+
+   ```env
+   VOICE_WORKER_1_TOKEN=PASTE_WORKER_1_TOKEN_HERE
+   VOICE_WORKER_2_TOKEN=PASTE_WORKER_2_TOKEN_HERE
+   ```
+3. Restart the application. Worker login failures are logged and do not stop the main bot.
+4. In each server, run `!voice setup` as a server Administrator. Open each generated OAuth URL and authorize the worker. The main bot cannot authorize another bot on your behalf.
+5. Run `!voice status` to see which configured bots are present and connected.
+
+Workers need the `bot` OAuth scope and the **View Channel**, **Connect**, and **Speak** permissions. Do not grant Administrator. The worker clients use only the Guilds and Guild Voice States gateway intents; the main bot retains its existing intents and responsibilities.
+
+`voice-pool.json` contains non-secret scheduler preferences. The main bot is preferred for normal playback, Worker 1 is next for additional channels, and Worker 2 is preferred when allocating a separate recording connection. A recording shares a bot already in its target channel when possible; otherwise it leases an idle worker and releases it after the recording is fully saved.
+
+**Current limitation:** playback is parallel across different voice channels, but sounds within the same voice channel are still serialized. This build does not yet mix up to five entrance sounds simultaneously. That requires a dedicated FFmpeg audio mixer; setting a queue limit does not create simultaneous playback.
