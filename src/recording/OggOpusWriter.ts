@@ -23,6 +23,13 @@ function crc32(buf: Buffer): number {
 }
 
 const SAMPLES_PER_PACKET = 960;
+const FRAME_MS = 20;
+/** Pauses shorter than this are treated as network jitter and left alone. */
+const MIN_GAP_MS = 100;
+/** Never insert more than this much silence at once (the session already splits files after longer pauses). */
+const MAX_FILL_FRAMES = 150;
+/** A valid 20 ms Opus silence frame (the same one Discord clients send). */
+const SILENCE_FRAME = Buffer.from([0xf8, 0xff, 0xfe]);
 const PRE_SKIP = 312;
 
 export class OggOpusWriter extends Transform {
@@ -31,6 +38,7 @@ export class OggOpusWriter extends Transform {
   #granule = 0n;
   #held: Buffer | null = null;
   #started = false;
+  #lastArrival: number | null = null;
 
   constructor() {
     super({ readableObjectMode: true, writableObjectMode: true });
@@ -81,17 +89,34 @@ export class OggOpusWriter extends Transform {
     this.push(this.#page(tags, 0, 0n));
   }
 
+  /** Writes one packet, holding it back by one so the final packet can carry the end-of-stream flag. */
+  #emit(packet: Buffer): void {
+    if (this.#held) {
+      this.#granule += BigInt(SAMPLES_PER_PACKET);
+      this.push(this.#page(this.#held, 0, this.#granule + BigInt(PRE_SKIP)));
+    }
+    this.#held = Buffer.from(packet);
+  }
+
   override _transform(chunk: Buffer, _enc: BufferEncoding, cb: TransformCallback): void {
     if (!this.#started) {
       this.#started = true;
       this.#writeHeaders();
     }
-    // Hold one packet back so the last one can carry the end-of-stream flag.
-    if (this.#held) {
-      this.#granule += BigInt(SAMPLES_PER_PACKET);
-      this.push(this.#page(this.#held, 0, this.#granule + BigInt(PRE_SKIP)));
+
+    // Discord sends nothing while someone is silent. Without compensation those pauses vanish and the
+    // speech sounds rushed and choppy, so put the missing 20 ms frames back as silence.
+    const now = performance.now();
+    if (this.#lastArrival !== null) {
+      const gapMs = now - this.#lastArrival;
+      if (gapMs >= MIN_GAP_MS) {
+        const missing = Math.min(MAX_FILL_FRAMES, Math.round(gapMs / FRAME_MS) - 1);
+        for (let i = 0; i < missing; i++) this.#emit(SILENCE_FRAME);
+      }
     }
-    this.#held = Buffer.from(chunk);
+    this.#lastArrival = now;
+
+    this.#emit(chunk);
     cb();
   }
 

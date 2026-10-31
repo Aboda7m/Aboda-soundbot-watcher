@@ -91,7 +91,7 @@ export default defineTextCommand({
           guildId,
           adapterCreator: msg.guild.voiceAdapterCreator,
           selfDeaf: false, // must be false or Discord sends no audio to the bot
-          selfMute: true,
+          selfMute: false, // same as the playback connection: this call may re-join one that is playing a sound
         });
 
         try {
@@ -137,8 +137,11 @@ export default defineTextCommand({
           await say(message, "There is no active recording in this server.");
           return;
         }
+        // stopSession resolved, so every file is fully flushed: only now may the connection go. If sounds are
+        // still playing or queued the queue's own idle-leave (now allowed, the recording is over) closes it.
+        const soundsActive = deps.queue.status().some((s) => s.guildId === guildId);
         const connection = getVoiceConnection(guildId);
-        if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+        if (!soundsActive && connection && connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
         await say(message, `⏹️ Recording saved.\nSession: \`${session.sessionId}\`\nDuration: ${session.durationSeconds}s`);
         return;
       }

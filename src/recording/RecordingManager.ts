@@ -25,12 +25,19 @@ export class RecordingManager {
     return session;
   }
 
-  /** Finalizes and removes the guild's session. `interrupted` marks it as cut short (e.g. bot disconnected). */
+  /**
+   * Finalizes the guild's session. The session stays registered until it is completely flushed, so nothing
+   * else (a second start, the voice adapter's idle leave) treats the guild as free while data is still being written.
+   * `interrupted` marks it as cut short (e.g. bot disconnected).
+   */
   async stopSession(guildId: string, interrupted = false): Promise<RecordingSession | null> {
     const session = this.#sessions.get(guildId);
     if (!session) return null;
-    this.#sessions.delete(guildId);
-    await session.finalize(interrupted ? "INTERRUPTED" : "SAVED");
+    try {
+      await session.finalize(interrupted ? "INTERRUPTED" : "SAVED");
+    } finally {
+      if (this.#sessions.get(guildId) === session) this.#sessions.delete(guildId);
+    }
     return session;
   }
 

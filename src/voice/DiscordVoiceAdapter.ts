@@ -2,12 +2,14 @@ import {
   AudioPlayerStatus,
   createAudioPlayer,
   entersState,
+  getVoiceConnection,
   joinVoiceChannel,
   VoiceConnectionStatus,
   type AudioPlayer,
   type VoiceConnection,
 } from "@discordjs/voice";
 import type { Client } from "discord.js";
+import { recordingManager } from "../recording/RecordingManager.ts";
 import { createResource } from "./AudioProvider.ts";
 import type { VoicePort } from "./VoicePort.ts";
 
@@ -20,13 +22,23 @@ interface GuildVoice {
   channelId: string;
 }
 
+export interface DiscordVoiceAdapterOptions {
+  /**
+   * True while something else (an active recording) needs this guild's voice connection: playback must then
+   * never destroy it, move it to another channel, or re-join it deafened. Default: a recording is active.
+   */
+  isPinned?: (guildId: string) => boolean;
+}
+
 /** One voice connection + one player per guild. Everything @discordjs/voice-specific for connections is here. */
 export class DiscordVoiceAdapter implements VoicePort {
   #client: Client;
+  #isPinned: (guildId: string) => boolean;
   #guilds = new Map<string, GuildVoice>();
 
-  constructor(client: Client) {
+  constructor(client: Client, options: DiscordVoiceAdapterOptions = {}) {
     this.#client = client;
+    this.#isPinned = options.isPinned ?? ((guildId) => recordingManager.isRecording(guildId));
   }
 
   async play(guildId: string, channelId: string, filePath: string, maxDurationSec?: number, onStarted?: () => void): Promise<void> {
@@ -80,14 +92,21 @@ export class DiscordVoiceAdapter implements VoicePort {
     this.#guilds.get(guildId)?.player.stop(true);
   }
 
+  /** Playback is done with this guild. Does nothing while a recording still needs the connection. */
   leave(guildId: string) {
+    if (this.#isPinned(guildId)) return;
+    this.#destroy(guildId);
+  }
+
+  /** Shutdown: tears everything down regardless of recordings. */
+  destroyAll() {
+    for (const id of [...this.#guilds.keys()]) this.#destroy(id);
+  }
+
+  #destroy(guildId: string) {
     const gv = this.#guilds.get(guildId);
     if (gv && gv.connection.state.status !== VoiceConnectionStatus.Destroyed) gv.connection.destroy();
     this.#guilds.delete(guildId);
-  }
-
-  destroyAll() {
-    for (const id of [...this.#guilds.keys()]) this.leave(id);
   }
 
   async #ensure(guildId: string, channelId: string): Promise<GuildVoice> {
@@ -99,9 +118,15 @@ export class DiscordVoiceAdapter implements VoicePort {
     if (!channel.joinable || ('speakable' in channel && !channel.speakable))
       throw new Error(`Missing permission (or channel full) to connect/speak in "${channel.name}"`);
 
+    // A recording owns the connection: never move it to another channel for a sound.
+    const pinned = this.#isPinned(guildId);
+    const live = pinned ? getVoiceConnection(guildId) : undefined;
+    if (live && live.joinConfig.channelId !== channelId)
+      throw new Error(`A recording is active in another voice channel of this server; cannot play in "${channel.name}"`);
+
     let gv = this.#guilds.get(guildId);
     if (gv && (gv.connection.state.status === VoiceConnectionStatus.Destroyed || gv.channelId !== channelId)) {
-      this.leave(guildId); // dead connection, or a different channel: start clean
+      this.#destroy(guildId); // dead connection, or a different channel: start clean
       gv = undefined;
     }
 
@@ -111,6 +136,8 @@ export class DiscordVoiceAdapter implements VoicePort {
         guildId,
         channelId,
         adapterCreator: guild.voiceAdapterCreator,
+        // Re-joining an existing (recording) connection sends these options again; a deafened bot receives no audio.
+        selfDeaf: !pinned,
       });
       gv = { connection, player, channelId };
       this.#guilds.set(guildId, gv);
