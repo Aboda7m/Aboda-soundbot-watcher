@@ -3,6 +3,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface VideoStreamConfig {
+  /** "disabled" (default): no video is published. "selfbot": publish through a user-account session (see README). */
+  publisher: "disabled" | "selfbot";
+  /** Must be true for publisher "selfbot": the person running the bot accepts that this breaks Discord's ToS. */
+  selfbotAcknowledgeTosRisk: boolean;
   streamsDirectory: string;
   respectVideoParams: boolean;
   bitrateOverride: boolean;
@@ -63,7 +67,16 @@ export async function loadVideoStreamConfig(): Promise<VideoStreamConfig> {
     throw new Error(`videostream.json: "h26xPreset" must be one of ${presets.join(", ")}.`);
   }
 
+  // Optional keys: absent in files written before they existed, so they default instead of failing the load.
+  const publisher = raw.publisher ?? "disabled";
+  if (publisher !== "disabled" && publisher !== "selfbot") {
+    throw new Error('videostream.json: "publisher" must be "disabled" or "selfbot".');
+  }
+  const selfbotAcknowledgeTosRisk = raw.selfbotAcknowledgeTosRisk === undefined ? false : requireBoolean(raw.selfbotAcknowledgeTosRisk, "selfbotAcknowledgeTosRisk");
+
   return {
+    publisher,
+    selfbotAcknowledgeTosRisk,
     streamsDirectory: resolve(PROJECT_ROOT, raw.streamsDirectory),
     respectVideoParams: requireBoolean(raw.respectVideoParams, "respectVideoParams"),
     bitrateOverride: requireBoolean(raw.bitrateOverride, "bitrateOverride"),

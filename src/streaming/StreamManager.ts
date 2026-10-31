@@ -38,6 +38,12 @@ export class StreamManager {
     try {
       session.handle = await this.options.provider.start({ ...input, filePath });
       session.state = "live";
+      // Playback that ends by itself (or dies) must not leave the session "live" forever.
+      void session.handle.ended?.then((error) => {
+        if (session.state !== "live") return;
+        if (error) { session.error = error; session.state = "failed"; }
+        else session.state = "stopped";
+      });
       return session;
     } catch (error) {
       session.error = error instanceof Error ? error.message : String(error);
