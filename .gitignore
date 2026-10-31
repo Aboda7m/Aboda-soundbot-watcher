@@ -53,3 +53,6 @@ recordings/
 streams/*.mp4
 streams/*.MP4
 streams/
+
+# Local video-stream settings (example stays tracked)
+videostream.json

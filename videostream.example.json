@@ -1,0 +1,15 @@
+{
+  "streamsDirectory": "./streams",
+  "respectVideoParams": false,
+  "bitrateOverride": false,
+  "width": 1280,
+  "height": 720,
+  "maxWidth": 0,
+  "maxHeight": 0,
+  "fps": 30,
+  "bitrateKbps": 2000,
+  "maxBitrateKbps": 2500,
+  "hardwareAcceleration": false,
+  "videoCodec": "H264",
+  "h26xPreset": "ultrafast"
+}

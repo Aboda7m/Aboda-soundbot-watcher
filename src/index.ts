@@ -25,8 +25,10 @@ import { DiscordVoiceAdapter } from "./voice/DiscordVoiceAdapter.ts";
 import { Watcher } from "./watcher/Watcher.ts";
 import { StreamManager } from "./streaming/StreamManager.ts";
 import { Mp4StreamProvider } from "./streaming/Mp4StreamProvider.ts";
+import { loadVideoStreamConfig } from "./streaming/videoStreamConfig.ts";
 
 const config = loadConfig();
+const videoStreamConfig = await loadVideoStreamConfig();
 if (!config.token) {
   console.error("DISCORD_TOKEN is missing. Copy .env.example to .env and fill it in.");
   process.exit(1);
@@ -54,8 +56,8 @@ workerClients.forEach((worker, index) => {
 });
 const library = new SoundLibrary(config.soundsDir, config.acceptedExtensions);
 const streamManager = new StreamManager({
-  directory: join(process.cwd(), "streams"),
-  provider: new Mp4StreamProvider({ directory: join(process.cwd(), "streams"), ffprobePath: config.ffprobePath }),
+  directory: videoStreamConfig.streamsDirectory,
+  provider: new Mp4StreamProvider({ directory: videoStreamConfig.streamsDirectory, ffprobePath: config.ffprobePath }),
 });
 
 let repo: SoundRepository;
