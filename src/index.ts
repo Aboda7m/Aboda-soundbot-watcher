@@ -25,13 +25,8 @@ import { AccessPolicy, type Capability } from "./access/AccessPolicy.ts";
 import { checkYtDlp } from "./tools/ytdlp.ts";
 import { DiscordVoiceAdapter } from "./voice/DiscordVoiceAdapter.ts";
 import { Watcher } from "./watcher/Watcher.ts";
-import { StreamManager } from "./streaming/StreamManager.ts";
-import { Mp4StreamProvider } from "./streaming/Mp4StreamProvider.ts";
-import { loadVideoStreamConfig } from "./streaming/videoStreamConfig.ts";
-import { createVideoPublisher } from "./streaming/SelfbotVideoPublisher.ts";
 
 const config = loadConfig();
-const videoStreamConfig = await loadVideoStreamConfig();
 if (!config.token) {
   console.error("DISCORD_TOKEN is missing. Copy .env.example to .env and fill it in.");
   process.exit(1);
@@ -58,13 +53,6 @@ workerClients.forEach((worker, index) => {
   worker.on(Events.Error, (err) => console.error(`[${id}] Discord client error:`, err.message));
 });
 const library = new SoundLibrary(config.soundsDir, config.acceptedExtensions);
-const { publisher: videoPublisher, problem: videoPublisherProblem } = createVideoPublisher(videoStreamConfig, process.env, { log: (m) => console.warn(m) });
-if (videoPublisher) console.warn("[stream] Video publishing is ENABLED through a user-account (selfbot) session. This breaks Discord's Terms of Service; use a throwaway account.");
-else if (videoPublisherProblem) console.warn(`[stream] ${videoPublisherProblem}`);
-const streamManager = new StreamManager({
-  directory: videoStreamConfig.streamsDirectory,
-  provider: new Mp4StreamProvider({ directory: videoStreamConfig.streamsDirectory, ffprobePath: config.ffprobePath, publisher: videoPublisher, publisherProblem: videoPublisherProblem }),
-});
 
 let repo: SoundRepository;
 try {
@@ -261,7 +249,7 @@ const importer = config.importEnabled
   : undefined;
 
 try {
-  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo, access, voiceHub, followRecorder, streamManager });
+  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo, access, voiceHub, followRecorder });
 } catch (err) {
   console.error(`Refusing to start: ${(err as Error).message}`);
   console.error("Fix the files in src/discord/commands/ and start again.");
@@ -456,7 +444,7 @@ async function shutdown(signal: string) {
   sessions.close();
   localSessions.close();
   importer?.close();
-  await Promise.allSettled([videoPublisher?.shutdown(), ...workerClients.map((worker) => worker.destroy()), client.destroy()]);
+  await Promise.allSettled([...workerClients.map((worker) => worker.destroy()), client.destroy()]);
   process.exit(0);
 }
 process.on("SIGINT", () => void shutdown("SIGINT"));
