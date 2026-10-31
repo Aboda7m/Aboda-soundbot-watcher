@@ -49,3 +49,7 @@ access.json.tmp
 sessions.json
 
 recordings/
+# Local video files used by the streaming feature (keep the folder itself)
+streams/*.mp4
+streams/*.MP4
+streams/

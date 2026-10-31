@@ -23,6 +23,8 @@ import { AccessPolicy, type Capability } from "./access/AccessPolicy.ts";
 import { checkYtDlp } from "./tools/ytdlp.ts";
 import { DiscordVoiceAdapter } from "./voice/DiscordVoiceAdapter.ts";
 import { Watcher } from "./watcher/Watcher.ts";
+import { StreamManager } from "./streaming/StreamManager.ts";
+import { Mp4StreamProvider } from "./streaming/Mp4StreamProvider.ts";
 
 const config = loadConfig();
 if (!config.token) {
@@ -51,6 +53,10 @@ workerClients.forEach((worker, index) => {
   worker.on(Events.Error, (err) => console.error(`[${id}] Discord client error:`, err.message));
 });
 const library = new SoundLibrary(config.soundsDir, config.acceptedExtensions);
+const streamManager = new StreamManager({
+  directory: join(process.cwd(), "streams"),
+  provider: new Mp4StreamProvider({ directory: join(process.cwd(), "streams"), ffprobePath: config.ffprobePath }),
+});
 
 let repo: SoundRepository;
 try {
@@ -216,7 +222,7 @@ const importer = config.importEnabled
   : undefined;
 
 try {
-  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo, access, voiceHub });
+  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo, access, voiceHub, streamManager });
 } catch (err) {
   console.error(`Refusing to start: ${(err as Error).message}`);
   console.error("Fix the files in src/discord/commands/ and start again.");

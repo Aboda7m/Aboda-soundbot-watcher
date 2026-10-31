@@ -11,6 +11,7 @@ import type { SoundLibrary } from "../sound/SoundLibrary.ts";
 import type { SoundQueue } from "../sound/SoundQueue.ts";
 import type { SoundRepository } from "../sound/SoundRepository.ts";
 import type { VoiceHub } from "../voice/VoiceHub.ts";
+import type { StreamManager } from "../streaming/StreamManager.ts";
 
 /** The small slice of a discord.js Message the simple handlers use. */
 export interface CommandMessage {
@@ -70,6 +71,7 @@ export interface CommandDeps {
   /** Who may use the bot and who holds which permission. Decided by user id, never by Discord permissions. */
   access: AccessPolicy;
   voiceHub: VoiceHub;
+  streamManager: StreamManager;
 }
 
 /** Everything `execute` receives. Only messages from a guild (server) channel reach a command. */

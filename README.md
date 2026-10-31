@@ -406,3 +406,19 @@ Workers need the `bot` OAuth scope and the **View Channel**, **Connect**, and **
 `voice-pool.json` contains non-secret scheduler preferences. The main bot is preferred for normal playback, Worker 1 is next for additional channels, and Worker 2 is preferred when allocating a separate recording connection. A recording shares a bot already in its target channel when possible; otherwise it leases an idle worker and releases it after the recording is fully saved.
 
 **Current limitation:** playback is parallel across different voice channels, but sounds within the same voice channel are still serialized. This build does not yet mix up to five entrance sounds simultaneously. That requires a dedicated FFmpeg audio mixer; setting a queue limit does not create simultaneous playback.
+
+## Video streaming (publishing backend pending)
+
+The video-streaming command modules and isolated MP4 provider are present, but Discord Go Live
+publishing is **not enabled**. The current normal-bot voice stack exposes voice audio playback,
+not a supported video publishing transport. The provider can validate/probe a local MP4 with
+`ffprobe`, then reports that publishing is unavailable rather than pretending to stream it.
+
+- Put local test files in `streams/` (MP4 files are git-ignored).
+- `!stream filename.mp4` validates the file and checks publishing availability.
+- `!streamstop` stops an active session when a publishing provider is available.
+- `!streamstatus` reports the configured provider and current session state.
+
+This implementation is deliberately isolated from `VoiceHub` and the existing sound playback
+pipeline. A bot-compatible Discord video publishing provider must be implemented before `!stream`
+can actually broadcast video or screen-share audio.
