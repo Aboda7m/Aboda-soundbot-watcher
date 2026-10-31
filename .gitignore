@@ -56,3 +56,8 @@ streams/
 
 # Local video-stream settings (example stays tracked)
 videostream.json
+
+# Saved `!record attach` follows (created by the bot)
+record-follows.json
+record-follows.json.tmp
+record-follows.json.corrupt-*

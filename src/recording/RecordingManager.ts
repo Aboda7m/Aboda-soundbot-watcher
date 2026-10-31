@@ -5,6 +5,8 @@ import { RecordingSession, type RecordingMeta } from "./RecordingSession.ts";
 export class RecordingManager {
   readonly #sessions = new Map<string, RecordingSession>();
   readonly #baseDir: string;
+  /** Called once each session is active (both `!record start` and follow sessions). Optional; it must never block or fail a recording. */
+  onStarted?: (session: RecordingSession) => void;
 
   constructor(baseDir: string = join(process.cwd(), "recordings")) {
     this.#baseDir = baseDir;
@@ -21,6 +23,11 @@ export class RecordingManager {
     } catch (err) {
       this.#sessions.delete(guildId);
       throw err;
+    }
+    try {
+      this.onStarted?.(session);
+    } catch (err) {
+      console.error(`Recording ${session.sessionId}: start hook failed:`, err instanceof Error ? err.message : err);
     }
     return session;
   }

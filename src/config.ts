@@ -49,6 +49,8 @@ export interface Config {
   dbPath: string;
   /** Runtime-editable access policy (whitelist/blacklist/permissions). */
   accessFile: string;
+  /** `!record attach` follows, kept so they survive a restart. */
+  followsFile: string;
   /** Bot owners: full control, never blocked. OWNER_USER_IDS only (legacy dashboard ids are not merged in). */
   ownerUserIds: string[];
   acceptedExtensions: string[];
@@ -56,6 +58,10 @@ export interface Config {
   introCooldownMs: number;
   maxQueuePerGuild: number;
   idleLeaveMs: number;
+  /** Play a short sound on the recording bot when a recording starts. RECORDING_ALERT_ENABLED=0 turns it off. */
+  recordingAlertEnabled: boolean;
+  /** Name of that sound in the sounds folder (same names as `!play`). Missing sound: no alert, recording is unaffected. */
+  recordingAlertSound: string;
   countPlays: boolean;
   commandPrefix: string;
   importEnabled: boolean;
@@ -131,6 +137,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     soundsDir: resolve(env.SOUNDS_DIR ?? "./sounds"),
     dbPath: resolve(env.DB_PATH ?? "./db.json"),
     accessFile: resolve(env.ACCESS_FILE ?? "./access.json"),
+    followsFile: resolve(env.RECORD_FOLLOWS_FILE ?? "./record-follows.json"),
     ownerUserIds: [...new Set(list(env.OWNER_USER_IDS))],
     acceptedExtensions: (env.ACCEPTED_EXTENSIONS ?? ".mp3,.wav")
       .split(",")
@@ -140,6 +147,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     introCooldownMs: num(env.INTRO_COOLDOWN_MS, 3000),
     maxQueuePerGuild: Math.max(1, num(env.MAX_QUEUE_PER_GUILD, 10)),
     idleLeaveMs: num(env.IDLE_LEAVE_MS, 5000),
+    recordingAlertEnabled: flag(env.RECORDING_ALERT_ENABLED, true),
+    recordingAlertSound: (env.RECORDING_ALERT_SOUND ?? "").trim() || "recording-alert",
     countPlays: flag(env.COUNT_PLAYS, true),
     commandPrefix: env.COMMAND_PREFIX?.trim() || "!",
     importEnabled: flag(env.IMPORT_ENABLED, true),

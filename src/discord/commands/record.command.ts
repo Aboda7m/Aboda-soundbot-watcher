@@ -195,6 +195,7 @@ export default defineTextCommand({
           context: {
             guildName: msg.guild.name,
             initiatedByName: msg.member?.displayName ?? msg.author.username,
+            notifyChannelId: msg.channel.id,
             channelName: (id) => msg.guild.channels.cache.get(id)?.name,
             resolveUserName: (id) => msg.guild.members.cache.get(id)?.displayName ?? msg.client.users.cache.get(id)?.username,
             notify: (text) => msg.channel.send({ content: text, allowedMentions: NO_MENTIONS }),

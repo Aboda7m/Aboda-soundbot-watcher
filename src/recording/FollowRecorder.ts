@@ -2,6 +2,7 @@ import type { VoiceConnection } from "@discordjs/voice";
 import type { RecordingLease, VoiceHub } from "../voice/VoiceHub.ts";
 import type { RecordingManager } from "./RecordingManager.ts";
 import type { RecordingSession } from "./RecordingSession.ts";
+import type { FollowStorePort, PersistedFollow } from "./FollowStore.ts";
 
 /**
  * `!record attach @user` / `!record detach`: record the voice channel a chosen user is in, wherever they go.
@@ -18,13 +19,16 @@ import type { RecordingSession } from "./RecordingSession.ts";
  * slot. Only this file knows about following; it imports Discord types only, so it is testable with plain fakes.
  *
  * All work for one guild runs one task at a time (`#run`), so quick moves, a detach during a start, or a connection
- * loss during a move can never overlap. Registrations live in memory: they are gone after a restart.
+ * loss during a move can never overlap. Registrations are saved through `store` (a JSON file) on attach/detach
+ * and put back by `restore()` after a restart; shutdown never touches the stored list.
  */
 
 /** What the recorder needs to name things and talk back, captured when `!record attach` runs. */
 export interface FollowContext {
   guildName?: string;
   initiatedByName?: string;
+  /** The text channel `attach` ran in; saved so notices can go there again after a restart. */
+  notifyChannelId?: string;
   /** Written into the manifest of each session. */
   channelName?(channelId: string): string | undefined;
   /** Looked up when a speaker's segment starts (same hook as a manual recording). */
@@ -39,6 +43,8 @@ export interface FollowRecorderOptions {
   manager: Pick<RecordingManager, "startSession" | "stopSession">;
   /** Calls `onLost` when the connection is destroyed or fails to reconnect. May be called more than once. */
   watchConnection?: (connection: VoiceConnection, onLost: () => void) => void;
+  /** Where registrations are kept so they survive a restart. Optional: without it follows are memory-only. */
+  store?: FollowStorePort;
   log?: (message: string, err?: unknown) => void;
 }
 
@@ -120,6 +126,7 @@ export class FollowRecorder {
       if (existing.targetId !== opts.targetId) return { ok: false, reason: "other-target", targetId: existing.targetId };
       existing.context = opts.context;
       existing.desired = opts.targetChannelId;
+      this.#persist(existing);
       const r = await this.#run(existing, () => this.#reconcile(existing));
       existing.lastError = r.error ?? null;
       return { ok: true, already: true, session: existing.session, ...(r.error ? { error: r.error } : {}) };
@@ -138,6 +145,7 @@ export class FollowRecorder {
       lastError: null,
     };
     this.#follows.set(opts.guildId, f);
+    this.#persist(f);
     const r = await this.#run(f, () => this.#reconcile(f));
     f.lastError = r.error ?? null;
     return { ok: true, already: false, session: f.session, ...(r.error ? { error: r.error } : {}) };
@@ -148,6 +156,7 @@ export class FollowRecorder {
     const f = this.#follows.get(guildId);
     if (!f) return { ok: false };
     this.#follows.delete(guildId);
+    this.#forget(guildId);
     f.detached = true; // an in-flight start notices this and stops looping; the task below then cleans up after it
 
     const closing = this.#run(f, async () => {
@@ -182,6 +191,55 @@ export class FollowRecorder {
     });
   }
 
+  /**
+   * After a restart: puts saved follows back. `resolve` turns a saved entry into a live context and the target's
+   * current voice channel (null: leave this entry for later, e.g. the server is not available yet; it stays saved).
+   * A guild that already has a follow (someone ran attach first) is left alone. Never rejects.
+   */
+  async restore(
+    entries: readonly PersistedFollow[],
+    resolve: (entry: PersistedFollow) => { context: FollowContext; targetChannelId: string | null } | null,
+  ): Promise<number> {
+    const restored: Follow[] = [];
+    for (const e of entries) {
+      if (this.#follows.has(e.guildId)) continue;
+      let r: ReturnType<typeof resolve>;
+      try {
+        r = resolve(e);
+      } catch (err) {
+        this.#log(`Could not restore the follow on ${e.targetId} in ${e.guildId}`, err);
+        continue;
+      }
+      if (!r) continue;
+      const f: Follow = {
+        guildId: e.guildId,
+        targetId: e.targetId,
+        initiatedBy: e.initiatedBy,
+        context: r.context,
+        desired: r.targetChannelId,
+        session: null,
+        lease: null,
+        detached: false,
+        chain: Promise.resolve(),
+        lastError: null,
+      };
+      this.#follows.set(e.guildId, f); // registered synchronously, so voice moves from here on are not missed
+      restored.push(f);
+    }
+    await Promise.allSettled(
+      restored.map((f) =>
+        this.#run(f, async () => {
+          try {
+            await this.#announce(f, await this.#reconcile(f));
+          } catch (err) {
+            this.#log(`Follow recording for ${f.targetId} failed`, err);
+          }
+        }),
+      ),
+    );
+    return restored.length;
+  }
+
   /** Bot shutdown: saves every running session as interrupted and drops all registrations. */
   async shutdown(): Promise<void> {
     const all = [...this.#follows.values()];
@@ -195,6 +253,31 @@ export class FollowRecorder {
   }
 
   // ---------- internals ----------
+
+  #persist(f: Follow): void {
+    const { guildId, targetId, initiatedBy, context } = f;
+    const prev = this.#opts.store?.all().find((e) => e.guildId === guildId && e.targetId === targetId);
+    try {
+      this.#opts.store?.set({
+        guildId,
+        targetId,
+        initiatedBy,
+        ...(context.initiatedByName ? { initiatedByName: context.initiatedByName } : {}),
+        ...(context.notifyChannelId ? { notifyChannelId: context.notifyChannelId } : {}),
+        createdAt: prev?.createdAt ?? new Date().toISOString(),
+      });
+    } catch (err) {
+      this.#log("Could not save the follow", err);
+    }
+  }
+
+  #forget(guildId: string): void {
+    try {
+      this.#opts.store?.remove(guildId);
+    } catch (err) {
+      this.#log("Could not remove the saved follow", err);
+    }
+  }
 
   #log(message: string, err?: unknown): void {
     (this.#opts.log ?? ((m, e) => console.error(m, e instanceof Error ? `: ${e.message}` : (e ?? ""))))(message, err);

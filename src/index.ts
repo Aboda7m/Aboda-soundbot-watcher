@@ -5,12 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkNetworkConfig, loadConfig } from "./config.ts";
 import { createClient, toVoiceMove } from "./discord/client.ts";
+import { NO_MENTIONS } from "./discord/commandUtils.ts";
 import { VoiceHub } from "./voice/VoiceHub.ts";
 import { loadVoicePoolConfig } from "./voice/voicePoolConfig.ts";
 import { registerTextCommands } from "./discord/textCommands.ts";
 import { createPublicServer } from "./http/server.ts";
 import { RecordingManager, recordingManager } from "./recording/RecordingManager.ts";
 import { FollowRecorder } from "./recording/FollowRecorder.ts";
+import { FollowStore } from "./recording/FollowStore.ts";
 import { createLocalServer } from "./http/localServer.ts";
 import { createDiscordOAuth } from "./http/auth/discordOAuth.ts";
 import { createAuthorizer } from "./http/auth/authorize.ts";
@@ -143,9 +145,12 @@ const now = () => Date.now();
 
 // `!record attach @user`: records the voice channel a chosen user is in and follows them. It has its own
 // RecordingManager (same recordings folder and format) so it never shares a session slot with `!record start`.
+const followStore = new FollowStore(config.followsFile);
+const followManager = new RecordingManager(recordingManager.baseDir);
 const followRecorder = new FollowRecorder({
   voiceHub,
-  manager: new RecordingManager(recordingManager.baseDir),
+  store: followStore,
+  manager: followManager,
   watchConnection: (connection: VoiceConnection, onLost) => {
     connection.once(VoiceConnectionStatus.Destroyed, onLost);
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
@@ -162,6 +167,21 @@ const followRecorder = new FollowRecorder({
   },
   log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
 });
+// Recording-in-progress alert: a short sound played by the bot that holds the recording connection (no queue, no second
+// bot). Best-effort: a missing sound or a playback error is logged and the recording carries on untouched.
+let warnedAlertMissing = false;
+const recordingAlert = (session: { guildId: string; channelId: string; sessionId: string }): void => {
+  if (!config.recordingAlertEnabled) return;
+  const path = library.resolve(config.recordingAlertSound);
+  if (!path) {
+    if (!warnedAlertMissing) console.warn(`[record] alert sound "${config.recordingAlertSound}" not found in ${config.soundsDir}; recordings start silently (set RECORDING_ALERT_SOUND or RECORDING_ALERT_ENABLED=0)`);
+    warnedAlertMissing = true;
+    return;
+  }
+  voiceHub.playOnRecording(session.guildId, session.channelId, path, 10).catch((err: Error) => console.warn(`[record] alert for ${session.sessionId} not played: ${err.message}`));
+};
+recordingManager.onStarted = recordingAlert;
+followManager.onStarted = recordingAlert;
 // Separate from the intro handler below on purpose: following must work with intros disabled or the user not on the whitelist.
 client.on(Events.VoiceStateUpdate, (_oldState, newState) => {
   void followRecorder.onVoiceMove({
@@ -485,6 +505,37 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("unhandledRejection", (err) => console.error("Unhandled rejection:", err));
 
+/** Puts the saved `!record attach` follows back once the bot and its voice workers are logged in. */
+async function restoreFollows(): Promise<void> {
+  const saved = followStore.all();
+  if (!saved.length) return;
+  const count = await followRecorder.restore(saved, (e) => {
+    const guild = client.guilds.cache.get(e.guildId);
+    if (!guild || !guild.available) {
+      console.warn(`[record] follow on ${e.targetId} not restored: server ${e.guildId} is not available (it stays saved)`);
+      return null;
+    }
+    const voiceId = guild.voiceStates.cache.get(e.targetId)?.channelId ?? null;
+    const channel = voiceId ? guild.channels.cache.get(voiceId) : undefined;
+    const notifyId = e.notifyChannelId;
+    return {
+      targetChannelId: channel?.type === ChannelType.GuildVoice ? channel.id : null,
+      context: {
+        guildName: guild.name,
+        initiatedByName: guild.members.cache.get(e.initiatedBy)?.displayName ?? e.initiatedByName ?? client.users.cache.get(e.initiatedBy)?.username ?? e.initiatedBy,
+        ...(notifyId ? { notifyChannelId: notifyId } : {}),
+        channelName: (id) => guild.channels.cache.get(id)?.name,
+        resolveUserName: (id) => guild.members.cache.get(id)?.displayName ?? client.users.cache.get(id)?.username,
+        notify: async (text) => {
+          const ch = notifyId ? guild.channels.cache.get(notifyId) : undefined;
+          if (ch?.isTextBased()) await ch.send({ content: text, allowedMentions: NO_MENTIONS });
+        },
+      },
+    };
+  });
+  console.log(`[record] restored ${count} of ${saved.length} saved follow(s) from ${config.followsFile}`);
+}
+
 client.login(config.token).then(async () => {
   await Promise.all(workerClients.map(async (worker, index) => {
     try {
@@ -495,6 +546,7 @@ client.login(config.token).then(async () => {
       await worker.destroy().catch(() => {});
     }
   }));
+  await restoreFollows();
 }).catch((err: Error) => {
   console.error("Discord login failed:", err.message);
   process.exit(1);

@@ -139,6 +139,28 @@ export class VoiceHub implements VoicePort {
     }
   }
 
+  /**
+   * Plays one short file on the bot that is leased for the recording in `channelId`: the same connection and
+   * player, no queue, no second bot. Returns false (nothing played) when no recording bot is there or it is
+   * already playing something. Marks the bot as playing meanwhile, so queued sounds for this channel wait their
+   * turn, and lets the bot go afterwards if the recording ended while the file was still playing.
+   */
+  async playOnRecording(guildId: string, channelId: string, filePath: string, maxDurationSec?: number): Promise<boolean> {
+    const slot = this.#slots.find((s) => this.#st(s.id, guildId).lease?.channelId === channelId);
+    if (!slot) return false;
+    const st = this.#st(slot.id, guildId);
+    if (st.playing) return false;
+    st.playing = channelId; // claimed synchronously, like #acquire
+    try {
+      await slot.adapter.play(guildId, channelId, filePath, maxDurationSec);
+      return true;
+    } finally {
+      st.playing = null;
+      if (!st.lease) slot.adapter.leave(guildId, channelId); // releaseRecording skipped the leave while we were playing
+      this.#wake(guildId);
+    }
+  }
+
   stop(guildId: string, channelId?: string): void {
     for (const s of this.#slots) {
       const playing = this.#st(s.id, guildId).playing;
