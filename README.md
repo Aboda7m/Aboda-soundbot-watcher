@@ -37,6 +37,7 @@ Each chat command lives in its own file in `src/discord/commands/` and is discov
 | `!soundlist` | `soundlist.command.ts` |
 | `!entrance`, `!RM-entrance` | `entrance.command.ts` |
 | `!import <url> [from X to Y]` | `import.command.ts` |
+| `!record start\|stop\|status\|list\|attach @user\|detach` | `record.command.ts` |
 
 Shared code: `textCommand.ts` (pure parsing and sound search), `commandTypes.ts` (the interface below),
 `commandUtils.ts` (reply helpers), `commandRegistry.ts` (the loader), `textCommands.ts` (dispatch).
@@ -325,6 +326,15 @@ If (and only if) a LAN device must reach the local API, bind `LOCAL_HOST` to the
 Give the PC (and the panel) fixed addresses, replace the example addresses, and note that Windows evaluates Block rules before Allow
 rules: the block above is limited to the Public and Domain profiles so it does not cancel the Private-profile allow. Mark the home network
 as Private, not Public. Do not create any inbound rule for 3939.
+
+## Following a user: `!record attach @user` / `!record detach`
+
+Same permission as `!record start` (owner, Administrator, or Manage Channels + Move Members). `attach` registers one user per server and records the voice channel they are in, **everyone in that channel, exactly like `!record start`**:
+
+- they join voice: a recording starts; they move to another channel: the session is saved and a new one starts there; they leave: the session is saved and the follow stays registered; they come back: recording resumes in a new session.
+- `!record detach` saves the running session and removes the follow. A bot disconnect saves the session as interrupted and keeps the follow; recording resumes on the user's next voice update.
+- Sessions use the normal recordings folder and manifest format (so `!record list` and `/recordings` show them). They are tracked separately from manual sessions (`src/recording/FollowRecorder.ts`): `!record stop` does not end a follow and `!record start` is not blocked by one. With a single bot, a follow and a manual recording cannot run at the same time (the second finds the bot busy); with voice workers they can.
+- The registration is kept in memory only: it is gone after a restart. Notices (started / moved / left / interrupted) are posted in the text channel where `attach` was run.
 
 ## Recording browser: synchronized playback and MP3 export
 

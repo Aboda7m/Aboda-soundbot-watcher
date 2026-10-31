@@ -11,6 +11,7 @@ import type { SoundLibrary } from "../sound/SoundLibrary.ts";
 import type { SoundQueue } from "../sound/SoundQueue.ts";
 import type { SoundRepository } from "../sound/SoundRepository.ts";
 import type { VoiceHub } from "../voice/VoiceHub.ts";
+import type { FollowRecorder } from "../recording/FollowRecorder.ts";
 import type { StreamManager } from "../streaming/StreamManager.ts";
 
 /** The small slice of a discord.js Message the simple handlers use. */
@@ -71,6 +72,8 @@ export interface CommandDeps {
   /** Who may use the bot and who holds which permission. Decided by user id, never by Discord permissions. */
   access: AccessPolicy;
   voiceHub: VoiceHub;
+  /** `!record attach` / `!record detach`: records the voice channel a chosen user is in. */
+  followRecorder: FollowRecorder;
   streamManager: StreamManager;
 }
 

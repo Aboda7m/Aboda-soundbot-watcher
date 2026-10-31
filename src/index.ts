@@ -1,5 +1,6 @@
 // Wiring only. Each piece below is independent; swap or fix one without touching the others.
-import { Events } from "discord.js";
+import { entersState, VoiceConnectionStatus, type VoiceConnection } from "@discordjs/voice";
+import { ChannelType, Events } from "discord.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkNetworkConfig, loadConfig } from "./config.ts";
@@ -8,7 +9,8 @@ import { VoiceHub } from "./voice/VoiceHub.ts";
 import { loadVoicePoolConfig } from "./voice/voicePoolConfig.ts";
 import { registerTextCommands } from "./discord/textCommands.ts";
 import { createPublicServer } from "./http/server.ts";
-import { recordingManager } from "./recording/RecordingManager.ts";
+import { RecordingManager, recordingManager } from "./recording/RecordingManager.ts";
+import { FollowRecorder } from "./recording/FollowRecorder.ts";
 import { createLocalServer } from "./http/localServer.ts";
 import { createDiscordOAuth } from "./http/auth/discordOAuth.ts";
 import { createAuthorizer } from "./http/auth/authorize.ts";
@@ -132,6 +134,37 @@ const envSeconds = (key: string, fallback: number) => {
 const GLOBAL_ENTRANCE_COOLDOWN_SEC = envSeconds("ENTRANCE_COOLDOWN_SEC", 0);
 const GLOBAL_RECONNECT_GRACE_SEC = envSeconds("ENTRANCE_RECONNECT_GRACE_SEC", 300);
 const now = () => Date.now();
+
+// `!record attach @user`: records the voice channel a chosen user is in and follows them. It has its own
+// RecordingManager (same recordings folder and format) so it never shares a session slot with `!record start`.
+const followRecorder = new FollowRecorder({
+  voiceHub,
+  manager: new RecordingManager(recordingManager.baseDir),
+  watchConnection: (connection: VoiceConnection, onLost) => {
+    connection.once(VoiceConnectionStatus.Destroyed, onLost);
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      try {
+        // Discord moved/reconnected us: fine. Otherwise the connection is gone and the session must be saved.
+        await Promise.race([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+        ]);
+      } catch {
+        onLost();
+      }
+    });
+  },
+  log: (msg, err) => console.error(msg, err instanceof Error ? `: ${err.message}` : (err ?? "")),
+});
+// Separate from the intro handler below on purpose: following must work with intros disabled or the user not on the whitelist.
+client.on(Events.VoiceStateUpdate, (_oldState, newState) => {
+  void followRecorder.onVoiceMove({
+    guildId: newState.guild.id,
+    userId: newState.id,
+    channelId: newState.channel?.type === ChannelType.GuildVoice ? newState.channelId : null,
+  });
+});
+
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (!config.introsEnabled) return;
   try {
@@ -228,7 +261,7 @@ const importer = config.importEnabled
   : undefined;
 
 try {
-  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo, access, voiceHub, streamManager });
+  await registerTextCommands(client, { library, queue, prefix: config.commandPrefix, importer, repo, access, voiceHub, followRecorder, streamManager });
 } catch (err) {
   console.error(`Refusing to start: ${(err as Error).message}`);
   console.error("Fix the files in src/discord/commands/ and start again.");
@@ -414,6 +447,7 @@ async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   console.log(`${signal}: shutting down`);
+  await followRecorder.shutdown(); // save running follow recordings before the voice connections are torn down
   queue.shutdown();
   repo.flush();
   watcher.close();
