@@ -17,6 +17,7 @@ import { SECURITY_HEADERS, contentTypeAllowed, json, readBody, safeEqual } from 
 import { parseCookies, serializeCookie } from "./auth/cookies.ts";
 import type { DiscordOAuth } from "./auth/discordOAuth.ts";
 import type { SessionStore } from "./auth/sessions.ts";
+import type { WatchManager } from "../watch/WatchManager.ts";
 
 /**
  * PUBLIC listener (default port 3939): the Cloudflare Tunnel origin.
@@ -53,6 +54,7 @@ export interface PublicDeps extends CoreDeps {
   discordClient?: Client;
   /** Persistent bot-user grants, managed only by owners or explicitly delegated access managers. */
   accessPolicy?: AccessPolicy;
+  watch?: WatchManager;
 }
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
@@ -63,6 +65,9 @@ const STATIC: Record<string, StaticEntry> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
+  "/watch": { file: "watch.html", type: "text/html; charset=utf-8", csp: "default-src 'none'; script-src 'self' https://www.youtube.com https://s.ytimg.com; style-src 'self'; img-src 'self' https://i.ytimg.com https://cdn.discordapp.com; media-src 'self' https: blob:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src 'self' https://www.youtube.com" },
+  "/watch.js": { file: "watch.js", type: "text/javascript; charset=utf-8" },
+  "/watch.css": { file: "watch.css", type: "text/css; charset=utf-8" },
   // "My entrance sound": any signed-in dashboard user. The page plays previews from blob: URLs, hence media-src.
   "/entrance": {
     file: "entrance.html",
@@ -117,7 +122,7 @@ const PUBLIC_ASSETS: Record<string, StaticEntry> = {
   "/login.css": { file: "login.css", type: "text/css; charset=utf-8" },
 };
 
-const PAGES = new Set(["/", "/entrance", "/import", "/logs", "/recordings", "/user-management"]);
+const PAGES = new Set(["/", "/entrance", "/import", "/logs", "/recordings", "/user-management", "/watch"]);
 
 /** Which owner-granted permission a route needs, beyond being allowed onto the dashboard at all. */
 function requiredCapability(path: string): Capability | null {
@@ -145,8 +150,9 @@ export function createPublicServer(d: PublicDeps): Server {
 
   // One-time login states with their PKCE verifier (never sent to the browser). Each state is also bound to the
   // browser that started the login by a cookie.
-  const pending = new Map<string, { exp: number; verifier: string }>();
-  const rememberState = (state: string, verifier: string) => {
+  const pending = new Map<string, { exp: number; verifier: string; next: string }>();
+  const safeNext = (value: string | null | undefined) => value && value.startsWith("/") && !value.startsWith("//") && !value.includes("\\") && !/[\r\n]/.test(value) ? value : "/";
+  const rememberState = (state: string, verifier: string, next: string) => {
     const now = Date.now();
     for (const [s, p] of pending) if (p.exp <= now) pending.delete(s);
     while (pending.size >= MAX_PENDING_LOGINS) {
@@ -154,13 +160,13 @@ export function createPublicServer(d: PublicDeps): Server {
       if (oldest === undefined) break;
       pending.delete(oldest);
     }
-    pending.set(state, { exp: now + LOGIN_TTL_MS, verifier });
+    pending.set(state, { exp: now + LOGIN_TTL_MS, verifier, next });
   };
   /** Single use: returns the verifier for a state we issued and that has not expired, else null. */
-  const consumeState = (state: string): string | null => {
+  const consumeState = (state: string): { verifier: string; next: string } | null => {
     const p = pending.get(state);
     pending.delete(state);
-    return p && p.exp > Date.now() ? p.verifier : null;
+    return p && p.exp > Date.now() ? { verifier: p.verifier, next: p.next } : null;
   };
 
   /** The sign-in page (also used to report sign-in problems). Contains only fixed text, never request data. */
@@ -169,12 +175,12 @@ export function createPublicServer(d: PublicDeps): Server {
     status: number,
     message?: string,
     headers: Record<string, string | string[]> = {},
-    opts: { back?: boolean } = {},
+    opts: { back?: boolean; next?: string } = {},
   ) {
     const action = opts.back
       ? `<a class="btn" href="/">Back to the dashboard</a>`
       : d.oauth
-      ? `<a class="btn" href="/auth/login">Login with Discord</a>`
+      ? `<a class="btn" href="/auth/login${opts.next && opts.next !== "/" ? `?next=${encodeURIComponent(opts.next)}` : ""}">Login with Discord</a>`
       : `<p class="msg" role="alert">Sign-in is not configured on this server yet. The owner needs to finish the Discord setup described in the README.</p>`;
     const intro = message ? `<p class="msg" role="alert">${esc(message)}</p>` : `<p>Sign in with your Discord account to continue.</p>`;
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title><link rel="stylesheet" href="/login.css"></head><body><main><h1>Soundbot dashboard</h1>${intro}${action}</main></body></html>`;
@@ -197,11 +203,11 @@ export function createPublicServer(d: PublicDeps): Server {
     return true;
   }
 
-  function login(res: ServerResponse) {
+  function login(res: ServerResponse, next: string) {
     if (!d.oauth) return loginPage(res, 503);
     const state = randomBytes(24).toString("base64url");
     const verifier = randomBytes(32).toString("base64url");
-    rememberState(state, verifier);
+    rememberState(state, verifier, safeNext(next));
     const challenge = createHash("sha256").update(verifier).digest("base64url");
     res
       .writeHead(302, {
@@ -224,12 +230,12 @@ export function createPublicServer(d: PublicDeps): Server {
     if (!d.oauth) return loginPage(res, 503, undefined, { "Set-Cookie": clear });
     if (url.searchParams.get("error")) return fail(403, "Sign-in was cancelled.");
     // The state must be one we issued, unused, and the same one this browser was given.
-    const verifier = state && code && bound && safeEqual(state, bound) ? consumeState(state) : null;
-    if (!verifier) return fail(400, "That sign-in attempt is invalid or has expired. Please try again.");
+    const loginState = state && code && bound && safeEqual(state, bound) ? consumeState(state) : null;
+    if (!loginState) return fail(400, "That sign-in attempt is invalid or has expired. Please try again.");
 
     let identity;
     try {
-      identity = await d.oauth.completeLogin(code, verifier);
+      identity = await d.oauth.completeLogin(code, loginState.verifier);
     } catch (err) {
       console.error("Discord sign-in failed:", (err as Error).message);
       return fail(502, "Could not complete sign-in with Discord. Please try again.");
@@ -253,7 +259,7 @@ export function createPublicServer(d: PublicDeps): Server {
     res
       .writeHead(302, {
         ...SECURITY_HEADERS,
-        Location: "/",
+        Location: loginState.next,
         "Set-Cookie": [clear, sessionCookie(session.id, d.sessions.maxAgeMs / 1000)],
       })
       .end();
@@ -306,11 +312,12 @@ export function createPublicServer(d: PublicDeps): Server {
         return void res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": a.type }).end(await readFile(join(PUBLIC_DIR, a.file)));
       }
       if (!isPost && url.pathname === "/login") {
+        const next = safeNext(url.searchParams.get("next"));
         const signedIn = parseCookies(req.headers.cookie)[SID];
-        if (signedIn && d.sessions.get(signedIn)) return void res.writeHead(302, { ...SECURITY_HEADERS, Location: "/" }).end();
-        return loginPage(res, d.oauth ? 200 : 503);
+        if (signedIn && d.sessions.get(signedIn)) return void res.writeHead(302, { ...SECURITY_HEADERS, Location: next }).end();
+        return loginPage(res, d.oauth ? 200 : 503, undefined, {}, { next });
       }
-      if (!isPost && url.pathname === "/auth/login") return login(res);
+      if (!isPost && url.pathname === "/auth/login") return login(res, safeNext(url.searchParams.get("next")));
       if (!isPost && url.pathname === "/auth/callback") return await callback(req, res, url);
       if (isPost && url.pathname === "/auth/logout") return logout(req, res);
 
@@ -319,7 +326,7 @@ export function createPublicServer(d: PublicDeps): Server {
       const session = sid ? d.sessions.get(sid) : null;
       if (!session) {
         const wantsPage = !isPost && PAGES.has(url.pathname) && (req.headers.accept ?? "").includes("text/html");
-        if (wantsPage) return void res.writeHead(302, { ...SECURITY_HEADERS, Location: "/login" }).end();
+        if (wantsPage) return void res.writeHead(302, { ...SECURITY_HEADERS, Location: `/login?next=${encodeURIComponent(url.pathname + url.search)}` }).end();
         return json(res, 401, { error: "Not signed in", login: "/login" });
       }
 
@@ -356,6 +363,29 @@ export function createPublicServer(d: PublicDeps): Server {
           stream.on("close", detach);
         },
       };
+
+      if (d.watch && url.pathname === "/api/watch/me" && req.method === "GET") {
+        return json(res, 200, { user: { id: uid, username: session.user.username }, rooms: d.watch.roomsForUser(uid), admin: d.can(uid, "access.manage") || d.can(uid, "entrance.manage") });
+      }
+      if (d.watch && url.pathname === "/api/watch/events" && req.method === "GET") {
+        const guildId = url.searchParams.get("guildId") ?? "";
+        const channelId = url.searchParams.get("channelId") ?? "";
+        const room = d.watch.getRoom(guildId, channelId);
+        if (!room || !room.participants.some((p) => p.userId === uid)) return json(res, 403, { error: "Join the associated Discord voice channel first." });
+        res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+        core.onStream(res);
+        d.watch.attach(room, res);
+        return;
+      }
+      if (d.watch && url.pathname === "/api/watch/command" && isPost) {
+        if (!guard(req, res)) return;
+        let body: Record<string, unknown>;
+        try { body = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: "Invalid JSON body." }); }
+        const room = d.watch.getRoom(String(body.guildId ?? ""), String(body.channelId ?? ""));
+        if (!room) return json(res, 404, { error: "Watch session not found. Join its Discord voice channel first." });
+        try { d.watch.command(room, uid, body); return json(res, 200, { ok: true }); }
+        catch (err) { return json(res, 400, { error: (err as Error).message }); }
+      }
 
       if (d.importer && url.pathname.startsWith("/api/import/")) {
         const handled = await handleImportRoute(d.importer, req, res, url, {

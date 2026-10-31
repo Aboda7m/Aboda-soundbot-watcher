@@ -432,3 +432,16 @@ not a supported video publishing transport. The provider can validate/probe a lo
 This implementation is deliberately isolated from `VoiceHub` and the existing sound playback
 pipeline. A bot-compatible Discord video publishing provider must be implemented before `!stream`
 can actually broadcast video or screen-share audio.
+
+
+## Watch Together dashboard (initial implementation)
+
+The authenticated public dashboard now includes `/watch`. Share `https://your-hostname/watch` in a Discord voice-channel text chat. If a visitor is not signed in, the Discord OAuth flow preserves `/watch` as the return destination. Once authenticated, the page automatically discovers the Discord voice channel(s) that account is currently in.
+
+Watch rooms are isolated by Discord guild + voice-channel ID. The bot's existing `GuildVoiceStates` Gateway intent is used to track joins, leaves, and moves; the bot does not join voice for video and does not transmit video through Discord. Each browser plays the selected media independently while the Soundbot server distributes shared playback state over authenticated Server-Sent Events. Room state is in memory and an empty room is retained for ten minutes for reconnects.
+
+Initial media support is YouTube embeds and browser-playable direct HTTP(S) video URLs (for example MP4/WebM). HLS, browser uploads, subtitles, queue/chat, and advanced admin settings are intentionally not included in this first synchronization foundation. The watch page currently exposes the admin indicator for accounts with `access.manage` or `entrance.manage`; advanced settings are a later phase.
+
+### Cloudflare notes
+
+The watch events endpoint uses the same public HTTP origin and does not require a new port or tunnel hostname. Cloudflare Tunnel supports WebSockets and SSE-style long-lived HTTP responses; the implementation currently uses SSE to avoid adding a second socket server. Keep the origin bound to the existing private/local host as configured. For local video uploads and large video delivery, choose a compliant storage/delivery path before enabling them: Cloudflare's public hostname upload limits and video-delivery terms apply. Do not assume an ordinary proxied Tunnel hostname is an unlimited video CDN.

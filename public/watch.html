@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Watch Together — Aboda Soundbot</title><link rel="stylesheet" href="/watch.css">
+</head>
+<body>
+  <header class="top"><a class="brand" href="/">ABODA <span>WATCH</span></a><div class="top-right"><span id="connection" class="status">Connecting…</span><a href="/" class="back">Dashboard</a></div></header>
+  <main class="layout">
+    <section class="main-column">
+      <div class="room-head"><div><p class="eyebrow">DISCORD WATCH PARTY</p><h1 id="room-title">Finding your voice channel…</h1><p id="room-subtitle" class="muted">Join a Discord voice channel to enter its watch session.</p></div><select id="room-select" aria-label="Choose voice channel" hidden></select></div>
+      <div class="player-shell">
+        <video id="video" playsinline preload="metadata" hidden></video>
+        <div id="youtube-player" hidden></div>
+        <div id="empty-player" class="empty-player"><div class="play-mark">▶</div><h2>No video playing</h2><p>Paste a video URL below to start watching together.</p></div>
+      </div>
+      <div class="controls"><button id="play" class="primary" disabled>▶ Play</button><button id="pause" disabled>Ⅱ Pause</button><button id="enable-playback" hidden>Enable playback</button><label class="seek-label">Position <input id="seek" type="range" min="0" max="100" value="0" disabled><span id="time">0:00 / 0:00</span></label><label class="rate-label">Speed <select id="rate" disabled><option>0.5</option><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>1.75</option><option>2</option></select></label></div>
+      <section class="source-card"><div class="section-title"><div><p class="eyebrow">NOW PLAYING</p><h2>Change video</h2></div><span class="muted">Everyone in this voice channel can change it</span></div><form id="source-form"><input id="video-url" type="url" placeholder="Paste a YouTube or public HTTPS MP4 / WebM URL…" autocomplete="url" required><button class="primary" type="submit">Load for everyone</button></form><p id="source-error" class="error" role="alert"></p></section>
+    </section>
+    <aside class="sidebar"><section class="side-card"><div class="section-title"><div><p class="eyebrow">VOICE CHANNEL</p><h2>Watching together</h2></div><span id="member-count" class="count">0</span></div><div id="participants" class="participants"><p class="muted">Waiting for participants…</p></div></section><section class="side-card info"><h3>How it works</h3><p>Join the matching Discord voice channel and keep this page open. Playback changes are shared with everyone in that channel.</p><p>Video plays in each person's browser. Discord voice chat stays separate and continues normally.</p></section><section id="admin-card" class="side-card" hidden><p class="eyebrow">ADMIN</p><h3>Room controls</h3><p class="muted">Advanced room settings will be added after playback synchronization is stable.</p></section></aside>
+  </main>
+  <script src="/watch.js"></script>
+</body></html>

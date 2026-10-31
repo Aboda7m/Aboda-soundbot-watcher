@@ -25,6 +25,7 @@ import { AccessPolicy, type Capability } from "./access/AccessPolicy.ts";
 import { checkYtDlp } from "./tools/ytdlp.ts";
 import { DiscordVoiceAdapter } from "./voice/DiscordVoiceAdapter.ts";
 import { Watcher } from "./watcher/Watcher.ts";
+import { WatchManager } from "./watch/WatchManager.ts";
 
 const config = loadConfig();
 if (!config.token) {
@@ -41,6 +42,21 @@ if (net.errors.length) {
 }
 
 const client = createClient();
+const watch = new WatchManager(10 * 60_000);
+
+// The watch dashboard follows authenticated Discord users in voice channels; it never joins or streams Discord voice.
+client.on(Events.VoiceStateUpdate, (oldState, newState) => {
+  const member = newState.member ?? oldState.member;
+  if (member?.user.bot) return;
+  const channel = newState.channel;
+  watch.updateVoice({
+    guildId: newState.guild.id, guildName: newState.guild.name, userId: newState.id,
+    username: member?.displayName ?? member?.user.username ?? newState.id,
+    channelId: channel?.isVoiceBased() ? channel.id : null,
+    channelName: channel?.isVoiceBased() ? channel.name : undefined,
+  });
+});
+
 const workerClients = config.voiceWorkerTokens.map(() => createClient(true));
 const voicePoolConfig = loadVoicePoolConfig();
 const voiceHub = new VoiceHub({ waitMs: voicePoolConfig.scheduler.waitMs, recordingPreferredWorker: voicePoolConfig.scheduler.recordingPreferredWorker });
@@ -358,6 +374,7 @@ const publicServer = createPublicServer({
   ...core,
   discordClient: client,
   accessPolicy: access,
+  watch,
   publicBaseUrl: publicBase,
   sessions,
   oauth: oauthReady
@@ -424,6 +441,13 @@ if (localServer) {
 }
 
 client.once(Events.ClientReady, (c) => {
+  for (const guild of c.guilds.cache.values()) {
+    for (const state of guild.voiceStates.cache.values()) {
+      const channel = state.channel; const member = state.member;
+      if (member?.user.bot) continue;
+      watch.updateVoice({ guildId: guild.id, guildName: guild.name, userId: state.id, username: member?.displayName ?? member?.user.username ?? state.id, channelId: channel?.isVoiceBased() ? channel.id : null, channelName: channel?.isVoiceBased() ? channel.name : undefined });
+    }
+  }
   console.log(`Logged in as ${c.user.tag} in ${c.guilds.cache.size} server(s).`);
   console.log(`Invite: https://discord.com/oauth2/authorize?client_id=${c.user.id}&scope=bot&permissions=${1024 + 1048576 + 2097152}`);
 });
@@ -439,6 +463,7 @@ async function shutdown(signal: string) {
   queue.shutdown();
   repo.flush();
   watcher.close();
+  watch.close();
   publicServer.close();
   localServer?.close();
   sessions.close();
