@@ -18,6 +18,7 @@ import { dirname } from "node:path";
  *   import           add sounds to the shared library (!import and the dashboard import page)
  *   entrance.manage  set or clear ANOTHER member's entrance sound (!entrance @user ...)
  *   logs             read the dashboard log viewer
+ *   recordings       browse and listen to voice recordings (opt-in: not part of the Bot Admin preset)
  *   access.manage    manage other users' bot permissions (delegation cannot exceed the manager's own grants)
  *
  * State lives in one small JSON file (created with the open defaults when it is missing) that can be edited by hand or
@@ -25,7 +26,7 @@ import { dirname } from "node:path";
  * overwritten or "repaired": at startup it is refused, while running the last good rules stay in force and changes
  * are refused until the file is fixed.
  */
-export const CAPABILITIES = ["dashboard", "import", "entrance.manage", "entrance.system", "logs", "access.manage"] as const;
+export const CAPABILITIES = ["dashboard", "import", "entrance.manage", "entrance.system", "logs", "recordings", "access.manage"] as const;
 
 /** Operational permissions included by the built-in Bot Admin preset. User-management stays opt-in. */
 export const ADMIN_CAPABILITIES: Capability[] = ["dashboard", "import", "entrance.manage", "entrance.system", "logs"];

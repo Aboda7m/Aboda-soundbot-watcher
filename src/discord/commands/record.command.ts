@@ -96,7 +96,12 @@ export default defineTextCommand({
 
         try {
           await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-          const session = await recordingManager.startSession(guildId, voiceChannel.id, msg.author.id, connection);
+          const session = await recordingManager.startSession(guildId, voiceChannel.id, msg.author.id, connection, {
+            guildName: msg.guild.name,
+            channelName: voiceChannel.name,
+            initiatedByName: msg.member?.displayName ?? msg.author.username,
+            resolveUserName: (id) => msg.guild.members.cache.get(id)?.displayName ?? msg.client.users.cache.get(id)?.username,
+          });
           if (!session) {
             await say(message, "A recording is already active in this server.");
             return;

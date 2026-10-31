@@ -7,6 +7,15 @@ import type { Readable } from "node:stream";
 import { OggOpusWriter } from "./OggOpusWriter.ts";
 import type { ParticipantTrack, RecordingManifest, RecordingState } from "./recordingTypes.ts";
 
+/** Optional human-readable names, written into the manifest so the recordings page can search by name. */
+export interface RecordingMeta {
+  guildName?: string;
+  channelName?: string;
+  initiatedByName?: string;
+  /** Looked up when a speaker's segment starts. */
+  resolveUserName?(userId: string): string | null | undefined;
+}
+
 /** A speaker is cut into a new file after this much silence. */
 const SILENCE_MS = 1500;
 
@@ -41,7 +50,10 @@ export class RecordingSession {
   readonly #segment = new Map<string, number>();
   #listener: ((userId: string) => void) | null = null;
 
-  constructor(guildId: string, channelId: string, initiatedBy: string, connection: VoiceConnection, baseDir: string) {
+  readonly #meta: RecordingMeta;
+
+  constructor(guildId: string, channelId: string, initiatedBy: string, connection: VoiceConnection, baseDir: string, meta: RecordingMeta = {}) {
+    this.#meta = meta;
     this.guildId = guildId;
     this.channelId = channelId;
     this.initiatedBy = initiatedBy;
@@ -80,7 +92,13 @@ export class RecordingSession {
     const n = (this.#segment.get(userId) ?? 0) + 1;
     this.#segment.set(userId, n);
     const file = `participants/${userId}_${n}.ogg`;
-    this.#tracks.push({ userId, file, startedAt: new Date().toISOString() });
+    let username: string | undefined;
+    try {
+      username = this.#meta.resolveUserName?.(userId) || undefined;
+    } catch {
+      // a failed name lookup must never cost us the audio
+    }
+    this.#tracks.push({ userId, file, startedAt: new Date().toISOString(), ...(username ? { username } : {}) });
 
     const src = this.#connection.receiver.subscribe(userId, {
       end: { behavior: EndBehaviorType.AfterSilence, duration: SILENCE_MS },
@@ -163,6 +181,9 @@ export class RecordingSession {
       guildId: this.guildId,
       channelId: this.channelId,
       initiatedBy: this.initiatedBy,
+      ...(this.#meta.guildName ? { guildName: this.#meta.guildName } : {}),
+      ...(this.#meta.channelName ? { channelName: this.#meta.channelName } : {}),
+      ...(this.#meta.initiatedByName ? { initiatedByName: this.#meta.initiatedByName } : {}),
       startedAt: this.startedAt.toISOString(),
       endedAt: this.endedAt?.toISOString(),
       durationSeconds: this.durationSeconds,

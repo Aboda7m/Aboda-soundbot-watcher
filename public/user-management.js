@@ -7,6 +7,7 @@ const LABELS = {
   "entrance.manage": ["Manage other users' entrance sounds", "Assign or remove entrance sounds for other users."],
   "entrance.system": ["System-wide entrance restrictions", "Enforce per-user automatic entrance duration caps that users and server admins cannot bypass."],
   logs: ["View logs", "Read sound-play and voice-activity logs."],
+  recordings: ["Listen to recordings", "Browse, play and download voice recordings from the servers they can access. Opt-in: recordings contain people's voices."],
   "access.manage": ["Manage bot user permissions", "Manage other users, but only delegate permissions you already have."],
 };
 function message(kind, text) { const node = $(kind); node.textContent = text || ""; node.hidden = !text; }

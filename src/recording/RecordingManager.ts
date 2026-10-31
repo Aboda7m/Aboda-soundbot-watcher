@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { VoiceConnection } from "@discordjs/voice";
-import { RecordingSession } from "./RecordingSession.ts";
+import { RecordingSession, type RecordingMeta } from "./RecordingSession.ts";
 
 export class RecordingManager {
   readonly #sessions = new Map<string, RecordingSession>();
@@ -11,10 +11,10 @@ export class RecordingManager {
   }
 
   /** Starts a session, or returns null when this guild is already recording. */
-  async startSession(guildId: string, channelId: string, userId: string, connection: VoiceConnection): Promise<RecordingSession | null> {
+  async startSession(guildId: string, channelId: string, userId: string, connection: VoiceConnection, meta?: RecordingMeta): Promise<RecordingSession | null> {
     if (this.#sessions.has(guildId)) return null;
 
-    const session = new RecordingSession(guildId, channelId, userId, connection, this.#baseDir);
+    const session = new RecordingSession(guildId, channelId, userId, connection, this.#baseDir, meta);
     this.#sessions.set(guildId, session); // reserve first so a double "start" cannot race
     try {
       await session.start();

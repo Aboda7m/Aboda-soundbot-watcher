@@ -6,6 +6,7 @@ import { checkNetworkConfig, loadConfig } from "./config.ts";
 import { createClient, toVoiceMove } from "./discord/client.ts";
 import { registerTextCommands } from "./discord/textCommands.ts";
 import { createPublicServer } from "./http/server.ts";
+import { recordingManager } from "./recording/RecordingManager.ts";
 import { createLocalServer } from "./http/localServer.ts";
 import { createDiscordOAuth } from "./http/auth/discordOAuth.ts";
 import { createAuthorizer } from "./http/auth/authorize.ts";
@@ -334,6 +335,16 @@ const publicServer = createPublicServer({
   logs: {
     soundPlayFile: join(process.cwd(), "sound-play-logs.json"),
     voiceActivityFile: join(process.cwd(), "voice-activity-logs.json"),
+  },
+  // Recordings browser (/recordings). Needs the owner to grant the "recordings" permission.
+  recordings: {
+    dir: recordingManager.baseDir,
+    voiceActivityFile: join(process.cwd(), "voice-activity-logs.json"),
+    names: {
+      guild: (id) => client.guilds.cache.get(id)?.name,
+      channel: (gid, cid) => client.guilds.cache.get(gid)?.channels.cache.get(cid)?.name,
+      user: (id) => client.users.cache.get(id)?.username,
+    },
   },
 });
 

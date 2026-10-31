@@ -1525,6 +1525,9 @@ fetch("/api/me", { cache: "no-store" })
       const el = document.getElementById(id);
       if (el && allowed === false) el.hidden = true;
     }
+    // Recordings: only offered when the server has the feature and this user holds the permission.
+    const recordings = document.getElementById("recordingsButton");
+    if (recordings && me.can?.recordings === true) recordings.hidden = false;
   })
   .catch(() => {});
 

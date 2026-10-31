@@ -9,6 +9,7 @@ import { handleAccessRoute } from "./accessRoutes.ts";
 import type { ImportService } from "../import/ImportService.ts";
 import { handleImportRoute } from "./importRoutes.ts";
 import { handleLogRoute, type LogFiles } from "./logRoutes.ts";
+import { handleRecordingRoute, type RecordingFiles } from "./recordingRoutes.ts";
 import { handleCoreApi, type CoreDeps } from "./coreApi.ts";
 import { canAdministerAnyGuild, handleEntranceRoute } from "./entranceRoutes.ts";
 import type { Client } from "discord.js";
@@ -46,6 +47,8 @@ export interface PublicDeps extends CoreDeps {
   importer?: ImportService;
   /** Optional log viewer (page at /logs + /api/logs). Left out = those routes do not exist. */
   logs?: LogFiles;
+  /** Optional recordings browser (page at /recordings + /api/recordings/*). Left out = those routes do not exist. */
+  recordings?: RecordingFiles;
   /** Discord client used for live guild-scoped entrance administration. */
   discordClient?: Client;
   /** Persistent bot-user grants, managed only by owners or explicitly delegated access managers. */
@@ -98,16 +101,28 @@ const LOG_STATIC: Record<string, StaticEntry> = {
   "/logs.css": { file: "logs.css", type: "text/css; charset=utf-8" },
 };
 
+// Served only when a recordings folder is configured. The page plays segments from its own /api/recordings/audio.
+const RECORDING_STATIC: Record<string, StaticEntry> = {
+  "/recordings": {
+    file: "recordings.html",
+    type: "text/html; charset=utf-8",
+    csp: "default-src 'none'; script-src 'self'; style-src 'self'; media-src 'self'; connect-src 'self'",
+  },
+  "/recordings.js": { file: "recordings.js", type: "text/javascript; charset=utf-8" },
+  "/recordings.css": { file: "recordings.css", type: "text/css; charset=utf-8" },
+};
+
 // The only files served without a session: the sign-in page's stylesheet.
 const PUBLIC_ASSETS: Record<string, StaticEntry> = {
   "/login.css": { file: "login.css", type: "text/css; charset=utf-8" },
 };
 
-const PAGES = new Set(["/", "/entrance", "/import", "/logs", "/user-management"]);
+const PAGES = new Set(["/", "/entrance", "/import", "/logs", "/recordings", "/user-management"]);
 
 /** Which owner-granted permission a route needs, beyond being allowed onto the dashboard at all. */
 function requiredCapability(path: string): Capability | null {
   if (path === "/import" || path === "/import.js" || path === "/import.css" || path.startsWith("/api/import/")) return "import";
+  if (path === "/recordings" || path === "/recordings.js" || path === "/recordings.css" || path.startsWith("/api/recordings")) return "recordings";
   if (path === "/logs" || path === "/logs.js" || path === "/logs.css" || path.startsWith("/api/logs")) return "logs";
   if (["/user-management", "/user-management.js", "/user-management.css", "/api/access/users", "/api/access/users/update"].includes(path)) return "access.manage";
   return null;
@@ -266,6 +281,7 @@ export function createPublicServer(d: PublicDeps): Server {
     ...STATIC,
     ...(d.importer ? IMPORT_STATIC : {}),
     ...(d.logs ? LOG_STATIC : {}),
+    ...(d.recordings ? RECORDING_STATIC : {}),
   };
 
   const server = createServer(async (req, res) => {
@@ -328,7 +344,7 @@ export function createPublicServer(d: PublicDeps): Server {
       if (!isPost && url.pathname === "/api/me") {
         return json(res, 200, {
           user: { id: uid, username: session.user.username },
-          can: { import: d.can(uid, "import"), logs: d.can(uid, "logs"), manageAccess: d.can(uid, "access.manage") },
+          can: { import: d.can(uid, "import"), logs: d.can(uid, "logs"), recordings: !!d.recordings && d.can(uid, "recordings"), manageAccess: d.can(uid, "access.manage") },
         });
       }
 
@@ -353,6 +369,8 @@ export function createPublicServer(d: PublicDeps): Server {
       }
 
       if (d.logs && (await handleLogRoute(d.logs, req, res, url, { json, allowedGuildIds: await d.accessibleGuildIds?.(uid) ?? [] }))) return;
+
+      if (d.recordings && (await handleRecordingRoute(d.recordings, req, res, url, { json, allowedGuildIds: (await d.accessibleGuildIds?.(uid)) ?? [] }))) return;
 
       if (await handleCoreApi(d, req, res, url, core)) return;
 
