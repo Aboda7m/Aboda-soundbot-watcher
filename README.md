@@ -326,6 +326,15 @@ Give the PC (and the panel) fixed addresses, replace the example addresses, and 
 rules: the block above is limited to the Public and Domain profiles so it does not cancel the Private-profile allow. Mark the home network
 as Private, not Public. Do not create any inbound rule for 3939.
 
+## Recording browser: synchronized playback and MP3 export
+
+The public `/recordings` page can play individual Ogg/Opus segments or synchronize all visible speakers against the session timeline. The synchronized player supports seek, playback speed, per-speaker mute/show and volume. Clicking the timeline ruler seeks the synchronized mix; clicking a speech block or a table Play button plays that individual segment.
+
+- Synchronized playback uses the browser Web Audio API and decodes the visible session audio into memory. Very large sessions are refused by the browser player with an MP3-export suggestion rather than risking an out-of-memory tab. Use a current Chrome, Edge or Firefox build.
+- MP3 export runs server-side through `FFMPEG_PATH` (or `ffmpeg` on `PATH`) and requires an FFmpeg build with `libmp3lame`. It mixes tracks at their manifest timestamps, preserves silence and overlaps, applies a limiter, and pads the output to the selected time range.
+- Export the full session or check individual segments in the table and export only those parts. The start/end fields trim the export range (`MM:SS` or `HH:MM:SS`; plain seconds are also accepted). Temporary MP3 files are created in the system temp directory and removed after the response finishes.
+- Export requests are authenticated like the rest of `/recordings`, scoped to the user's accessible guilds, and can only select files already discovered in that session. A request is limited to 500 segments, a 4-hour range and a 512 KB JSON body.
+
 ## Optional: pre-convert hot sounds (about 10x less CPU per play)
 
     ffmpeg -i airhorn.mp3 -ar 48000 -ac 2 -c:a libopus -b:a 64k airhorn.opus

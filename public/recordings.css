@@ -224,9 +224,9 @@ main {
   #audio { height: 36px; }
   .p-ctl .lbl, #p-dl { display: none; } /* every table row has its own Download */
   /* the segment table keeps what matters on a phone: who, when in the recording, how long, actions */
-  .seg-table th:nth-child(1), .seg-table td:nth-child(1),
-  .seg-table th:nth-child(4), .seg-table td:nth-child(4),
-  .seg-table th:nth-child(6), .seg-table td:nth-child(6) { display: none; }
+  .seg-table th:nth-child(2), .seg-table td:nth-child(2),
+  .seg-table th:nth-child(5), .seg-table td:nth-child(5),
+  .seg-table th:nth-child(7), .seg-table td:nth-child(7) { display: none; }
   .seg-table th, .seg-table td { padding-left: 8px; padding-right: 8px; }
   .seg-table td.who .id { display: none; }
   .seg-table { font-size: 13px; }
@@ -240,4 +240,48 @@ main {
 
 @media (prefers-reduced-motion: reduce) {
   .badge[data-kind="active"]::before { animation: none; }
+}
+
+/* ---------- synchronized player and MP3 export ---------- */
+.mix-panel, .export-panel {
+  background: linear-gradient(145deg, #1a2030, #151a26);
+  border: 1px solid #343e55;
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .14);
+}
+.mix-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.mix-heading h3 { font-size: 16px; font-weight: 700; margin-bottom: 3px; }
+.mix-status { flex: none; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 12px; }
+.mix-controls, .export-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 9px; }
+.btn.primary { background: #d69b2e; border-color: #e6b24e; color: #17130b; font-weight: 700; }
+.btn.primary:hover:not(:disabled) { background: #edb94e; }
+.mix-speed { width: 105px; }
+.mix-speed select { min-height: 38px; padding: 6px 8px; background: var(--pad); border: 1px solid var(--line); border-radius: 8px; }
+.mix-clock { margin-left: auto; color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mix-seek { display: block; width: 100%; margin: 14px 0 12px; accent-color: var(--accent); cursor: pointer; }
+.mix-speaker-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+.mix-speaker { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; background: rgba(255,255,255,.035); border: 1px solid var(--line); border-radius: 9px; min-width: 0; }
+.mix-speaker-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
+.mix-speaker-name i { width: 9px; height: 9px; flex: none; border-radius: 50%; background: hsl(var(--hue, 40) 70% 60%); }
+.mix-speaker-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mix-speaker input { width: 82px; flex: none; accent-color: var(--accent); }
+.export-controls .field { width: 130px; }
+.export-controls .field input { min-height: 38px; }
+.export-controls #export-status { flex: 1 1 180px; min-width: 150px; }
+.seg-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.seg-actions .hint:first-child { margin-right: auto; }
+.select-cell { width: 34px; text-align: center; }
+.select-cell input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+@media (max-width: 720px) {
+  .mix-panel, .export-panel { padding: 12px; }
+  .mix-heading { flex-direction: column; gap: 6px; }
+  .mix-controls { gap: 6px; }
+  .mix-clock { margin-left: 0; width: 100%; }
+  .mix-speaker-controls { grid-template-columns: 1fr; }
+  .export-controls .field { flex: 1 1 100px; width: auto; }
+  .export-controls .btn { flex: 1 1 100%; }
+  .seg-actions { gap: 6px; }
+  .seg-actions .hint:first-child { flex-basis: 100%; }
 }

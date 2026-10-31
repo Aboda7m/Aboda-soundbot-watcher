@@ -352,6 +352,7 @@ const publicServer = createPublicServer({
   // Recordings browser (/recordings). Needs the owner to grant the "recordings" permission.
   recordings: {
     dir: recordingManager.baseDir,
+    ffmpegPath: config.ffmpegPath,
     voiceActivityFile: join(process.cwd(), "voice-activity-logs.json"),
     names: {
       guild: (id) => client.guilds.cache.get(id)?.name,

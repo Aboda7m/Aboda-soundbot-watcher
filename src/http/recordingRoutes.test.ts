@@ -34,7 +34,7 @@ async function buildTree() {
     guildName: "Test Guild", channelName: "General", initiatedByName: "Alice",
     startedAt: "2026-10-30T14:03:34.000Z", endedAt: "2026-10-30T14:05:34.000Z", durationSeconds: 120, status: "completed",
     outputs: { participants: [
-      { userId: ALICE, file: `participants/${ALICE}_1.ogg`, startedAt: "2026-10-30T14:03:40.000Z", username: "Alice" },
+      { userId: ALICE, file: `participants/${ALICE}_1.ogg`, startedAt: "2026-10-30T14:03:40.123Z", username: "Alice" },
       { userId: ALICE, file: `participants/${ALICE}_2.ogg`, startedAt: "2026-10-30T14:04:10.000Z", username: "Alice" },
       { userId: BOB, file: `participants/${BOB}_1.ogg`, startedAt: "2026-10-30T14:03:55.000Z" },
     ] },
@@ -119,7 +119,7 @@ test("session detail has per-segment offsets and real durations read from the Og
   await withApi(async (call) => {
     const body: any = await (await call(`/api/recordings/session?guild=${G1}&id=20261030_140334_7be63d`)).json();
     assert.deepEqual(body.tracks.map((t: any) => t.file), [`${ALICE}_1.ogg`, `${BOB}_1.ogg`, `${ALICE}_2.ogg`]); // by time, not by name
-    assert.deepEqual(body.tracks.map((t: any) => t.offsetSec), [6, 21, 36]);
+    assert.deepEqual(body.tracks.map((t: any) => t.offsetSec), [6.123, 21, 36]);
     assert.deepEqual(body.tracks.map((t: any) => t.durationSec), [1, 0.5, 2]);
     assert.equal(body.tracks[0].username, "Alice");
     assert.equal(body.tracks[1].username, "BobFromLog");
@@ -167,5 +167,19 @@ test("audio: full file, byte ranges, bad ranges, and no way out of the recording
     const dl = await call(`${base}&file=${ALICE}_1.ogg&download=1`);
     assert.match(dl.headers.get("content-disposition") ?? "", /^attachment; filename="[A-Za-z0-9._-]+\.ogg"$/);
     await dl.arrayBuffer();
+  });
+});
+
+
+test("MP3 export endpoint validates selection and stays scoped to allowed guilds", async () => {
+  await withApi(async (call) => {
+    const url = `/api/recordings/export?guild=${G1}&id=20261030_140334_7be63d`;
+    const headers = { "Content-Type": "application/json" };
+    const invalid = await call(url, { method: "POST", headers, body: JSON.stringify({ files: ["../manifest.json"], startSec: 0, endSec: 10 }) });
+    assert.equal(invalid.status, 400);
+    const unavailable = await call(url, { method: "POST", headers, body: JSON.stringify({ files: [`${ALICE}_1.ogg`], startSec: 0, endSec: 10 }) });
+    assert.equal(unavailable.status, 503, "the test server has no FFmpeg export configured");
+    const forbidden = await call(`/api/recordings/export?guild=${G2}&id=20261030_150000_cccccc`, { method: "POST", headers, body: JSON.stringify({ files: [`${ALICE}_1.ogg`], startSec: 0, endSec: 10 }) });
+    assert.equal(forbidden.status, 404);
   });
 });

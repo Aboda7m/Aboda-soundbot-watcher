@@ -1,15 +1,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
-import { open, readFile, readdir, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { open, readFile, readdir, stat, mkdtemp, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
 import { SECURITY_HEADERS, SNOWFLAKE } from "./common.ts";
 
 /**
- * Read-only API over the recordings folder (guilds/<guildId>/.../<sessionId>/participants/<userId>_<n>.ogg).
+ * API over the recordings folder (guilds/<guildId>/.../<sessionId>/participants/<userId>_<n>.ogg).
  *
- *   GET /api/recordings                         every recording the signed-in user may see (newest first)
- *   GET /api/recordings/session?guild=&id=     one recording: its segments with offsets and durations
- *   GET /api/recordings/audio?guild=&id=&file= one segment, streamed with Range support (&download=1 = attachment)
+ *   GET  /api/recordings                         every recording the signed-in user may see (newest first)
+ *   GET  /api/recordings/session?guild=&id=     one recording: its segments with precise offsets and durations
+ *   GET  /api/recordings/audio?guild=&id=&file= one segment, streamed with Range support (&download=1 = attachment)
+ *   POST /api/recordings/export?guild=&id=      mix selected segment files and return a synchronized MP3
  *
  * Safety: the tree is scanned by the server and every path used for reading comes from that scan, never from the
  * request. A request can only name a guild, a session id and a file name; these are matched against the scan, so
@@ -19,6 +23,8 @@ import { SECURITY_HEADERS, SNOWFLAKE } from "./common.ts";
 export interface RecordingFiles {
   /** The recordings folder, i.e. the one that contains `guilds/`. */
   dir: string;
+  /** FFmpeg executable used for synchronized MP3 exports. */
+  ffmpegPath?: string;
   /** Used only to learn display names for ids that the manifests (older recordings) do not carry. */
   voiceActivityFile?: string;
   /** Live lookups, e.g. from the Discord client cache. All optional. */
@@ -49,6 +55,10 @@ const INDEX_TTL_MS = 4000;
 /** A manifest that still says "active" this long after the last write belongs to a crashed or killed bot. */
 const STALE_ACTIVE_MS = 15 * 60_000;
 const OPUS_PRE_SKIP = 312;
+const execFileAsync = promisify(execFile);
+const MAX_EXPORT_BODY = 512 * 1024;
+const MAX_EXPORT_SEGMENTS = 500;
+const MAX_EXPORT_SECONDS = 4 * 60 * 60;
 
 interface RawTrack {
   name: string;
@@ -314,17 +324,18 @@ function summarize(s: RawSession, r: Resolver, now: number) {
   let durationSec: number | null;
   let endedAtMs: number | null;
   if (status === "active") {
-    durationSec = Math.max(0, Math.round((now - s.startedAtMs) / 1000));
+    durationSec = Math.max(0, Math.round(((now - s.startedAtMs) / 1000) * 1000) / 1000);
     endedAtMs = null;
   } else if (status === "completed" && manifestDuration !== null) {
-    durationSec = Math.round(manifestDuration);
+    const preciseDuration = manifestEnd === null ? manifestDuration : (manifestEnd - s.startedAtMs) / 1000;
+    durationSec = Math.max(0, Math.round(preciseDuration * 1000) / 1000);
     endedAtMs = manifestEnd ?? s.startedAtMs + manifestDuration * 1000;
   } else {
     // interrupted / incomplete / unknown: the best evidence is when the last audio was written
     const end = manifestEnd ?? lastAudioMs;
     const guess = end === null ? null : (end - s.startedAtMs) / 1000;
     const believable = guess !== null && guess >= 0 && guess <= MAX_GUESSED_SEC;
-    durationSec = believable ? Math.round(guess) : null;
+    durationSec = believable ? Math.round(guess * 1000) / 1000 : null;
     endedAtMs = believable ? end : null;
   }
 
@@ -443,6 +454,110 @@ function serveAudio(req: IncomingMessage, res: ServerResponse, track: RawTrack, 
   stream.pipe(res);
 }
 
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += part.length;
+    if (size > MAX_EXPORT_BODY) throw Object.assign(new Error("Export request is too large."), { status: 413 });
+    chunks.push(part);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw Object.assign(new Error("Invalid JSON body."), { status: 400 });
+  }
+}
+
+function finiteRange(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+async function exportMp3(
+  files: RecordingFiles,
+  session: RawSession,
+  selectedFiles: string[],
+  rangeStart: number,
+  rangeEnd: number,
+  res: ServerResponse,
+): Promise<void> {
+  if (!files.ffmpegPath) throw Object.assign(new Error("MP3 export is not configured."), { status: 503 });
+  const wanted = new Set(selectedFiles);
+  const chosen = session.tracks.filter((t) => wanted.has(t.name));
+  if (!chosen.length || chosen.length !== wanted.size) throw Object.assign(new Error("One or more selected audio parts are unavailable."), { status: 404 });
+  if (chosen.length > MAX_EXPORT_SEGMENTS) throw Object.assign(new Error(`Select no more than ${MAX_EXPORT_SEGMENTS} audio parts.`), { status: 400 });
+
+  const { data: manifest } = await readManifest(session.dir);
+  const starts = new Map<string, number>();
+  for (const rec of participantsOf(manifest)) {
+    const file = asString(rec.file, 300);
+    const started = asTime(rec.startedAt);
+    if (file && started !== null) starts.set(basename(file), started);
+  }
+
+  const clips: { path: string; offset: number; duration: number; file: string }[] = [];
+  for (const track of chosen) {
+    const duration = await oggDurationSec(track);
+    if (duration === null || duration <= 0) continue;
+    const started = starts.get(track.name) ?? (track.birthtimeMs > 0 ? track.birthtimeMs : track.mtimeMs - duration * 1000);
+    const offset = Math.max(0, (started - session.startedAtMs) / 1000);
+    if (offset < rangeEnd && offset + duration > rangeStart) clips.push({ path: track.path, offset, duration, file: track.name });
+  }
+  if (!clips.length) throw Object.assign(new Error("No selected audio overlaps this time range."), { status: 422 });
+
+  const workDir = await mkdtemp(join(tmpdir(), "aboda-recording-export-"));
+  const output = join(workDir, "recording.mp3");
+  try {
+    const args = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-threads", "1"];
+    for (const clip of clips) args.push("-i", clip.path);
+    const filters: string[] = [];
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i]!;
+      const localStart = Math.max(0, rangeStart - clip.offset);
+      const localEnd = Math.min(clip.duration, rangeEnd - clip.offset);
+      const delay = Math.max(0, Math.round((clip.offset - rangeStart) * 1000));
+      if (localEnd <= localStart) continue;
+      filters.push(`[${i}:a]atrim=start=${localStart.toFixed(3)}:end=${localEnd.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${delay}|${delay}[a${i}]`);
+    }
+    const labels = clips.map((_, i) => `[a${i}]`).join("");
+    filters.push(`${labels}amix=inputs=${clips.length}:duration=longest:dropout_transition=0:normalize=0,apad=pad_dur=${(rangeEnd - rangeStart).toFixed(3)},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,alimiter=limit=0.95[out]`);
+    args.push(
+      "-filter_complex", filters.join(";"), "-map", "[out]", "-t", (rangeEnd - rangeStart).toFixed(3),
+      "-vn", "-sn", "-dn", "-map_metadata", "-1", "-ar", "48000", "-ac", "2",
+      "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3", output,
+    );
+    try {
+      await execFileAsync(files.ffmpegPath, args, {
+        timeout: Math.min(15 * 60_000, Math.max(60_000, (rangeEnd - rangeStart) * 3000)),
+        killSignal: "SIGKILL", maxBuffer: 2 * 1024 * 1024, windowsHide: true,
+      });
+    } catch (err) {
+      console.error("Recording MP3 export failed:", err instanceof Error ? err.message : err);
+      throw Object.assign(new Error("FFmpeg could not mix this recording. Check that FFmpeg includes the MP3 encoder (libmp3lame)."), { status: 422 });
+    }
+    const info = await stat(output);
+    if (!info.size) throw Object.assign(new Error("FFmpeg produced an empty MP3."), { status: 422 });
+    const downloadName = `${session.id}_mix.mp3`;
+    res.writeHead(200, {
+      "Content-Type": "audio/mpeg",
+      "Content-Length": info.size,
+      "Content-Disposition": `attachment; filename="${downloadName}"`,
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    const stream = createReadStream(output);
+    const cleanup = () => { stream.destroy(); void rm(workDir, { recursive: true, force: true }); };
+    res.once("close", cleanup);
+    res.once("finish", () => void rm(workDir, { recursive: true, force: true }));
+    stream.once("error", () => res.destroy());
+    stream.pipe(res);
+  } catch (err) {
+    await rm(workDir, { recursive: true, force: true });
+    throw err;
+  }
+}
+
 /** Returns true if the request was one of ours (and has been answered). */
 export async function handleRecordingRoute(
   files: RecordingFiles,
@@ -452,7 +567,8 @@ export async function handleRecordingRoute(
   kit: RecordingRouteKit,
 ): Promise<boolean> {
   const path = url.pathname;
-  if (req.method !== "GET" || (path !== "/api/recordings" && path !== "/api/recordings/session" && path !== "/api/recordings/audio")) return false;
+  const isExport = path === "/api/recordings/export" && req.method === "POST";
+  if ((!isExport && req.method !== "GET") || (path !== "/api/recordings" && path !== "/api/recordings/session" && path !== "/api/recordings/audio" && !isExport)) return false;
 
   const notFound = () => kit.json(res, 404, { error: "Recording not found." });
 
@@ -484,6 +600,41 @@ export async function handleRecordingRoute(
     if (!session) session = findSession(await sessions(files, true), guildId, id, kit); // maybe it was created a moment ago
     if (!session) {
       notFound();
+      return true;
+    }
+
+    if (isExport) {
+      if (req.headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
+        kit.json(res, 415, { error: "Content-Type must be application/json" });
+        return true;
+      }
+      const parsedBody = await readJsonBody(req);
+      if (typeof parsedBody !== "object" || parsedBody === null || Array.isArray(parsedBody)) {
+        kit.json(res, 400, { error: "Invalid export request." });
+        return true;
+      }
+      const body = parsedBody as Record<string, unknown>;
+      const filesToExport = Array.isArray(body.files) ? body.files.filter((v): v is string => typeof v === "string" && SAFE_FILE.test(v)) : [];
+      if (!filesToExport.length || filesToExport.length !== (Array.isArray(body.files) ? body.files.length : 0)) {
+        kit.json(res, 400, { error: "Choose at least one valid audio part." });
+        return true;
+      }
+      const rangeStart = finiteRange(body.startSec, 0);
+      const manifestEnd = asTime(session.manifest?.endedAt);
+      const manifestDuration = typeof session.manifest?.durationSeconds === "number" ? session.manifest.durationSeconds : null;
+      const lastFileEnd = session.tracks.length ? (Math.max(...session.tracks.map((t) => t.mtimeMs)) - session.startedAtMs) / 1000 : 1;
+      const defaultEnd = manifestEnd !== null ? (manifestEnd - session.startedAtMs) / 1000 : manifestDuration ?? Math.max(1, lastFileEnd);
+      const rangeEnd = finiteRange(body.endSec, defaultEnd);
+      if (rangeStart < 0 || rangeEnd <= rangeStart || rangeEnd - rangeStart > MAX_EXPORT_SECONDS) {
+        kit.json(res, 400, { error: `Choose a valid range up to ${MAX_EXPORT_SECONDS / 3600} hours.` });
+        return true;
+      }
+      const sessionDuration = summarize(session, resolver, now).durationSec;
+      if (sessionDuration !== null && rangeEnd > sessionDuration + 0.25) {
+        kit.json(res, 400, { error: "The export range extends beyond this recording." });
+        return true;
+      }
+      await exportMp3(files, session, filesToExport, rangeStart, rangeEnd, res);
       return true;
     }
 
@@ -519,17 +670,18 @@ export async function handleRecordingRoute(
           username: resolver.user(t.userId, m?.username),
           n: t.n,
           bytes: t.bytes,
-          durationSec: durationSec === null ? null : Math.round(durationSec * 10) / 10,
+          durationSec: durationSec === null ? null : Math.round(durationSec * 1000) / 1000,
           startedAt: new Date(startMs).toISOString(),
-          offsetSec: Math.max(0, Math.round(((startMs - session.startedAtMs) / 1000) * 10) / 10),
+          offsetSec: Math.max(0, Math.round(((startMs - session.startedAtMs) / 1000) * 1000) / 1000),
         };
       }),
     );
     tracks.sort((a, b) => a.offsetSec - b.offsetSec || a.file.localeCompare(b.file));
     kit.json(res, 200, { session: summary, tracks });
   } catch (err) {
-    console.error("Recordings read error:", err);
-    kit.json(res, 500, { error: "Could not read the recordings folder." });
+    const status = typeof err === "object" && err !== null && "status" in err && typeof (err as { status?: unknown }).status === "number" ? (err as { status: number }).status : 500;
+    if (status >= 500 && status !== 503) console.error("Recordings route error:", err);
+    kit.json(res, status, { error: err instanceof Error && status < 500 ? err.message : status === 503 ? "MP3 export is unavailable on this server." : "Could not process the recording request." });
   }
   return true;
 }

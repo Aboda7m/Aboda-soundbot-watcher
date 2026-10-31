@@ -44,6 +44,13 @@ function fmtClock(sec) {
   const s = sec % 60;
   return h ? `${h}:${pad2(m)}:${pad2(s)}` : `${m}:${pad2(s)}`;
 }
+function fmtPreciseClock(sec) {
+  sec = Math.max(0, sec);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = (sec % 60).toFixed(3).replace(/0+$/, "").replace(/\.$/, "").padStart(2, "0");
+  return h ? `${h}:${pad2(m)}:${s}` : `${m}:${s}`;
+}
 function fmtLen(sec) {
   if (sec == null) return NONE;
   if (sec < 10) return `${(Math.round(sec * 10) / 10).toFixed(1)} s`;
@@ -341,7 +348,11 @@ async function loadList(initial) {
 // =====================================================================================
 
 const audio = $("audio");
-const D = { session: null, segs: [], hidden: new Set(), current: null, pps: 1, total: 1, pollTimer: 0, zoomFrame: 0 };
+const D = {
+  session: null, segs: [], hidden: new Set(), selected: new Set(), current: null, pps: 1, total: 1, pollTimer: 0, zoomFrame: 0,
+  mixContext: null, mixBuffers: new Map(), mixSources: [], mixGains: new Map(), mixMaster: null,
+  mixPlaying: false, mixBase: 0, mixStartedAt: 0, mixFrame: 0, mixLoadPromise: null, mixRequest: 0,
+};
 
 function visibleSegs() {
   return D.segs.filter((s) => !D.hidden.has(s.key));
@@ -360,6 +371,7 @@ function markCurrent() {
 }
 
 function play(seg, startAt = 0) {
+  stopMix(true);
   D.current = seg;
   $("player").hidden = false;
   audio.src = audioUrl(D.session, seg);
@@ -414,6 +426,243 @@ window.addEventListener("resize", () => {
   if (!$("detail-view").hidden) renderTimeline();
 });
 
+// Synchronized multi-track playback. Every decoded segment is scheduled against one AudioContext clock.
+function mixStatus(message) { $("mix-status").textContent = message; }
+function mixContext() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error("This browser does not support synchronized audio playback.");
+  if (!D.mixContext) {
+    D.mixContext = new AudioContextClass();
+    D.mixMaster = D.mixContext.createGain();
+    D.mixMaster.gain.value = 0.92;
+    D.mixCompressor = D.mixContext.createDynamicsCompressor();
+    D.mixCompressor.threshold.value = -4;
+    D.mixCompressor.knee.value = 5;
+    D.mixCompressor.ratio.value = 12;
+    D.mixCompressor.attack.value = 0.003;
+    D.mixCompressor.release.value = 0.2;
+    D.mixMaster.connect(D.mixCompressor);
+    D.mixCompressor.connect(D.mixContext.destination);
+  }
+  return D.mixContext;
+}
+async function loadMixBuffers() {
+  const ctx = mixContext();
+  const sessionKey = D.session ? `${D.session.guildId}/${D.session.id}` : "";
+  const visible = D.segs.filter((seg) => !D.hidden.has(seg.key));
+  const estimatedBytes = visible.reduce((sum, seg) => sum + Math.max(0, seg.durationSec ?? seg.bytes / 8000) * 48000 * 4 * 2, 0);
+  if (estimatedBytes > 768 * 1024 * 1024) throw new Error("This recording is too large to decode safely in browser memory. Use MP3 export instead.");
+  const missing = visible.filter((seg) => !D.mixBuffers.has(seg.file));
+  if (!missing.length) return;
+  if (D.mixLoadPromise?.key === sessionKey) return D.mixLoadPromise.promise;
+  const loading = (async () => {
+    let done = D.segs.length - missing.length;
+    if (D.session && `${D.session.guildId}/${D.session.id}` === sessionKey) mixStatus(`Loading audio… ${done}/${D.segs.length}`);
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(4, missing.length) }, async () => {
+      while (cursor < missing.length) {
+        const seg = missing[cursor++];
+        const response = await fetch(audioUrl(D.session, seg), { credentials: "same-origin" });
+        if (!response.ok) throw new Error(`Could not load ${segLabel(seg)} audio (${response.status}).`);
+        const data = await response.arrayBuffer();
+        const buffer = await ctx.decodeAudioData(data);
+        if (D.session && `${D.session.guildId}/${D.session.id}` === sessionKey) D.mixBuffers.set(seg.file, buffer);
+        done++;
+        if (D.session && `${D.session.guildId}/${D.session.id}` === sessionKey) mixStatus(`Loading audio… ${done}/${D.segs.length}`);
+      }
+    });
+    await Promise.all(workers);
+  })();
+  D.mixLoadPromise = { key: sessionKey, promise: loading };
+  try { await loading; }
+  finally { if (D.mixLoadPromise?.promise === loading) D.mixLoadPromise = null; }
+}
+function mixPosition() {
+  if (!D.mixContext || !D.mixPlaying) return D.mixBase;
+  const speed = Number($("mix-speed").value);
+  return Math.min(D.total, Math.max(0, D.mixBase + Math.max(0, D.mixContext.currentTime - D.mixStartedAt) * speed));
+}
+function stopMixSources() {
+  for (const source of D.mixSources) {
+    try { source.stop(); } catch { /* already stopped */ }
+    try { source.disconnect(); } catch { /* already disconnected */ }
+  }
+  D.mixSources = [];
+}
+function clearMixCache() {
+  D.mixBuffers.clear();
+  for (const gain of D.mixGains.values()) {
+    try { gain.disconnect(); } catch { /* already disconnected */ }
+  }
+  D.mixGains.clear();
+}
+function updateMixControls() {
+  $("mix-play").disabled = D.mixPlaying;
+  $("mix-play").textContent = D.mixPlaying ? "▶ Playing" : D.mixBase > 0 ? "▶ Resume" : "▶ Play all";
+  $("mix-pause").disabled = !D.mixPlaying;
+  $("mix-stop").disabled = !D.mixPlaying && D.mixBase === 0;
+}
+function stopMix(reset = true) {
+  D.mixRequest++;
+  if (D.mixPlaying) D.mixBase = mixPosition();
+  D.mixPlaying = false;
+  if (D.mixFrame) cancelAnimationFrame(D.mixFrame);
+  D.mixFrame = 0;
+  stopMixSources();
+  if (reset) D.mixBase = 0;
+  $("mix-seek").value = String(D.mixBase);
+  $("mix-clock").textContent = `${fmtClock(D.mixBase)} / ${fmtClock(D.total)}`;
+  updateMixControls();
+  mixStatus(D.mixBase > 0 ? "Paused" : "Ready");
+}
+function tickMix() {
+  if (!D.mixPlaying) return;
+  const position = mixPosition();
+  $("mix-seek").value = String(position);
+  $("mix-clock").textContent = `${fmtClock(position)} / ${fmtClock(D.total)}`;
+  const head = $("timeline").querySelector(".tl-head");
+  if (head) { head.style.left = `${position * D.pps}px`; head.style.display = "block"; }
+  const timeline = $("timeline");
+  const x = position * D.pps;
+  if (x < timeline.scrollLeft || x > timeline.scrollLeft + timeline.clientWidth - 40) timeline.scrollLeft = Math.max(0, x - timeline.clientWidth / 3);
+  if (position >= D.total) {
+    stopMix(true);
+    mixStatus("Finished");
+    return;
+  }
+  D.mixFrame = requestAnimationFrame(tickMix);
+}
+async function startMixAt(position = D.mixBase) {
+  if (!D.session || !D.segs.length) return;
+  const request = ++D.mixRequest;
+  audio.pause();
+  D.current = null;
+  markCurrent();
+  try {
+    const ctx = mixContext();
+    await ctx.resume();
+    await loadMixBuffers();
+    if (request !== D.mixRequest) return;
+    stopMixSources();
+    const speed = Number($("mix-speed").value);
+    D.mixBase = Math.max(0, Math.min(D.total, position));
+    D.mixStartedAt = ctx.currentTime + 0.08;
+    for (const seg of D.segs) {
+      if (D.hidden.has(seg.key)) continue;
+      const buffer = D.mixBuffers.get(seg.file);
+      if (!buffer || seg.offsetSec + buffer.duration <= D.mixBase) continue;
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.playbackRate.value = speed;
+      let gain = D.mixGains.get(seg.key);
+      if (!gain) {
+        gain = ctx.createGain();
+        gain.gain.value = D.mixVolume?.get(seg.key) ?? 1;
+        gain.connect(D.mixMaster);
+        D.mixGains.set(seg.key, gain);
+      }
+      source.connect(gain);
+      const offsetInBuffer = Math.max(0, D.mixBase - seg.offsetSec);
+      const delay = Math.max(0, seg.offsetSec - D.mixBase) / speed;
+      source.start(D.mixStartedAt + delay, offsetInBuffer);
+      D.mixSources.push(source);
+    }
+    D.mixPlaying = true;
+    updateMixControls();
+    mixStatus("Playing all visible speakers");
+    D.mixFrame = requestAnimationFrame(tickMix);
+  } catch (err) {
+    if (request !== D.mixRequest) return;
+    stopMix(false);
+    mixStatus(err.message || "Could not start synchronized playback.");
+  }
+}
+$("mix-play").addEventListener("click", () => startMixAt(D.mixBase));
+$("mix-pause").addEventListener("click", () => stopMix(false));
+$("mix-stop").addEventListener("click", () => stopMix(true));
+$("mix-seek").addEventListener("input", () => {
+  const value = Number($("mix-seek").value);
+  $("mix-clock").textContent = `${fmtClock(value)} / ${fmtClock(D.total)}`;
+  if (!D.mixPlaying) D.mixBase = value;
+});
+$("mix-seek").addEventListener("change", () => {
+  if (D.mixPlaying) startMixAt(Number($("mix-seek").value));
+});
+$("mix-speed").addEventListener("change", () => {
+  const position = mixPosition();
+  if (D.mixPlaying) startMixAt(position);
+});
+
+function renderMixSpeakerControls() {
+  const box = $("mix-speaker-controls");
+  box.replaceChildren();
+  for (const speaker of D.order || []) {
+    const label = el("label", { class: "mix-speaker", hue: hueOf(speaker.key) },
+      el("span", { class: "mix-speaker-name" }, el("i"), el("span", { text: speaker.label })),
+      el("input", { type: "range", min: "0", max: "1.5", step: "0.05", value: String(D.mixVolume?.get(speaker.key) ?? 1), "aria-label": `${speaker.label} volume` }),
+    );
+    const slider = label.querySelector("input");
+    slider.addEventListener("input", () => {
+      const value = Number(slider.value);
+      if (!D.mixVolume) D.mixVolume = new Map();
+      D.mixVolume.set(speaker.key, value);
+      const gain = D.mixGains.get(speaker.key);
+      if (gain) gain.gain.setTargetAtTime(value, D.mixContext.currentTime, 0.025);
+    });
+    box.append(label);
+  }
+}
+
+function parseTimeInput(value, fallback) {
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  if (/^\d+(?:\.\d+)?$/.test(raw)) return Number(raw);
+  const parts = raw.split(":");
+  if (parts.length < 2 || parts.length > 3 || parts.some((part) => !/^\d+(?:\.\d+)?$/.test(part))) return NaN;
+  const numbers = parts.map(Number);
+  const seconds = numbers[numbers.length - 1];
+  const minutes = numbers[numbers.length - 2];
+  const hours = numbers.length === 3 ? numbers[0] : 0;
+  if (seconds >= 60 || (numbers.length === 3 && minutes >= 60)) return NaN;
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+async function exportMp3(files, label) {
+  if (!files.length) { $("export-status").textContent = "Select at least one segment."; return; }
+  const startSec = parseTimeInput($("export-start").value, 0);
+  const endSec = parseTimeInput($("export-end").value, D.total);
+  if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || startSec < 0 || endSec <= startSec || endSec > D.total + 0.25) {
+    $("export-status").textContent = "Use MM:SS or HH:MM:SS within this recording.";
+    return;
+  }
+  const buttons = [$("export-all"), $("export-selected")];
+  buttons.forEach((b) => (b.disabled = true));
+  $("export-status").textContent = `Preparing ${label}…`;
+  try {
+    const response = await fetch(`/api/recordings/export?guild=${encodeURIComponent(D.session.guildId)}&id=${encodeURIComponent(D.session.id)}`, {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files, startSec, endSec }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `Export failed (${response.status}).`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = el("a", { href: url, download: `${D.session.id}_mix.mp3` });
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    $("export-status").textContent = `Downloaded MP3 · ${fmtBytes(blob.size)}`;
+  } catch (err) {
+    $("export-status").textContent = err.message || "MP3 export failed.";
+  } finally {
+    buttons.forEach((b) => (b.disabled = false));
+  }
+}
+$("export-all").addEventListener("click", () => exportMp3(D.segs.map((s) => s.file), "full recording"));
+$("export-selected").addEventListener("click", () => exportMp3([...D.selected], "selected parts"));
+
+
 function buildSegs(data) {
   const segs = data.tracks.map((t, i) => ({
     ...t,
@@ -441,11 +690,14 @@ function renderSpeakers() {
       if (D.hidden.has(o.key)) D.hidden.delete(o.key);
       else D.hidden.add(o.key);
       btn.setAttribute("aria-pressed", String(!D.hidden.has(o.key)));
+      const position = mixPosition();
       renderTimeline();
       renderTable();
+      if (D.mixPlaying) startMixAt(position);
     });
     box.append(btn);
   }
+  renderMixSpeakerControls();
 }
 
 function zoomToPps() {
@@ -474,7 +726,7 @@ function renderTimeline() {
     tick.style.left = `${t * D.pps}px`;
     axis.append(tick);
   }
-  axis.addEventListener("click", (e) => playAt((e.clientX - axis.getBoundingClientRect().left) / D.pps));
+  axis.addEventListener("click", (e) => startMixAt((e.clientX - axis.getBoundingClientRect().left) / D.pps));
   inner.append(axis);
 
   for (const lane of lanes) {
@@ -507,6 +759,11 @@ function renderTable() {
   for (const seg of D.segs) {
     if (D.hidden.has(seg.key)) continue;
     shown++;
+    const selectCell = el("td", { class: "select-cell" }, el("input", { type: "checkbox", class: "seg-select", checked: D.selected.has(seg.file), "aria-label": `Select segment ${seg.no}` }));
+    selectCell.querySelector("input").addEventListener("change", (event) => {
+      if (event.target.checked) D.selected.add(seg.file); else D.selected.delete(seg.file);
+      $("selection-count").textContent = `${D.selected.size} selected`;
+    });
     const who = el("td", { class: "who", hue: hueOf(seg.key) }, el("i"), segLabel(seg));
     if (seg.userId && seg.username) who.append(" ", el("span", { class: "id", text: seg.userId }));
     const act = el("td", { class: "act" },
@@ -515,7 +772,7 @@ function renderTable() {
       el("a", { class: "btn small", href: audioUrl(D.session, seg, true), download: true, "aria-label": `Download segment ${seg.no}` }, el("span", { class: "full", text: "Download" }), el("span", { class: "short", "aria-hidden": "true", text: "↓" })),
     );
     body.append(el("tr", { "data-file": seg.file },
-      el("td", { text: String(seg.no) }), who,
+      selectCell, el("td", { text: String(seg.no) }), who,
       el("td", { text: fmtClock(seg.offsetSec) }),
       el("td", { text: timeSecFmt.format(new Date(seg.startedAt)) }),
       el("td", { text: fmtLen(seg.durationSec) }),
@@ -525,14 +782,32 @@ function renderTable() {
   }
   $("seg-empty").hidden = D.segs.length > 0;
   $("seg-empty").textContent = D.segs.length ? "" : "No speech was captured in this recording.";
+  $("selection-count").textContent = `${D.selected.size} selected`;
   markCurrent();
 }
 
+$("select-visible").addEventListener("click", () => {
+  for (const seg of visibleSegs()) D.selected.add(seg.file);
+  renderTable();
+});
+$("clear-selection").addEventListener("click", () => {
+  D.selected.clear();
+  renderTable();
+});
+
 function renderDetail(data) {
   const s = data.session;
+  const sameSession = D.session?.guildId === s.guildId && D.session?.id === s.id;
   D.session = s;
   D.segs = buildSegs(data);
   D.total = Math.max(1, s.durationSec ?? 0, ...D.segs.map((g) => g.offsetSec + (g.durationSec ?? 1)));
+  $("mix-seek").max = String(D.total);
+  $("mix-seek").value = String(D.mixBase || 0);
+  $("mix-clock").textContent = `${fmtClock(D.mixBase || 0)} / ${fmtClock(D.total)}`;
+  if (!sameSession) {
+    $("export-start").value = "0:00";
+    $("export-end").value = fmtPreciseClock(D.total);
+  }
 
   const started = new Date(s.startedAt);
   const ended = s.endedAt ? new Date(s.endedAt) : null;
@@ -574,7 +849,16 @@ async function showDetail(guildId, id) {
   for (const n of ["d-sub", "d-meta"]) $(n).textContent = "";
   $("seg-body").replaceChildren();
   $("timeline").replaceChildren();
+  stopMix(true);
+  D.session = null;
+  D.segs = [];
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+  D.current = null;
   D.hidden = new Set();
+  D.selected = new Set();
+  clearMixCache();
   $("to-list").href = listHash;
   window.scrollTo(0, 0);
   try {
@@ -608,6 +892,15 @@ function route() {
     return;
   }
   // list view
+  stopMix(true);
+  D.session = null;
+  D.segs = [];
+  clearMixCache();
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+  $("player").hidden = true;
+  setPlayerOffset();
   $("detail-view").hidden = true;
   $("list-view").hidden = false;
   document.title = "Recordings";

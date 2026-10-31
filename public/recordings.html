@@ -77,6 +77,35 @@
         <p id="d-meta" class="d-meta"></p>
       </header>
 
+      <section class="mix-panel" aria-label="Synchronized player">
+        <div class="mix-heading">
+          <div><h3>Full recording player</h3><p class="hint">Play every speaker together, keeping the original timing and overlaps.</p></div>
+          <span id="mix-status" class="mix-status" role="status">Ready</span>
+        </div>
+        <div class="mix-controls">
+          <button id="mix-play" class="btn primary" type="button">▶ Play all</button>
+          <button id="mix-pause" class="btn" type="button" disabled>Pause</button>
+          <button id="mix-stop" class="btn" type="button" disabled>Stop</button>
+          <label class="field mix-speed"><span>Speed</span><select id="mix-speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+          <span id="mix-clock" class="mix-clock">00:00 / 00:00</span>
+        </div>
+        <input id="mix-seek" class="mix-seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Seek through the full recording">
+        <div id="mix-speaker-controls" class="mix-speaker-controls"></div>
+      </section>
+
+      <section class="export-panel" aria-label="MP3 export">
+        <div class="mix-heading">
+          <div><h3>Export as MP3</h3><p class="hint">Mix speakers into one synchronized audio file. Select segments below for a custom export.</p></div>
+        </div>
+        <div class="export-controls">
+          <label class="field"><span>Start time</span><input id="export-start" type="text" inputmode="numeric" placeholder="00:00" value="0:00" aria-label="Export start time, minutes and seconds or hours minutes and seconds"></label>
+          <label class="field"><span>End time</span><input id="export-end" type="text" inputmode="numeric" placeholder="00:00" aria-label="Export end time, minutes and seconds or hours minutes and seconds"></label>
+          <button id="export-all" class="btn primary" type="button">Export full recording</button>
+          <button id="export-selected" class="btn" type="button">Export selected parts</button>
+          <span id="export-status" class="hint" role="status"></span>
+        </div>
+      </section>
+
       <div class="d-tools">
         <fieldset class="speakers" id="d-speakers">
           <legend>Speakers <span class="hint">(click to show or hide)</span></legend>
@@ -91,10 +120,11 @@
       <p id="d-note" class="hint note" hidden></p>
 
       <div class="seg-wrap">
+        <div class="seg-actions"><span class="hint">Choose individual parts for a custom MP3.</span><button id="select-visible" class="btn small" type="button">Select visible</button><button id="clear-selection" class="btn small" type="button">Clear selection</button><span id="selection-count" class="hint">0 selected</span></div>
         <table class="seg-table">
           <caption class="visually-hidden">Segments of this recording in time order</caption>
           <thead>
-            <tr><th>#</th><th>Speaker</th><th>Starts at</th><th>Clock time</th><th>Length</th><th>Size</th><th><span class="visually-hidden">Actions</span></th></tr>
+            <tr><th><span class="visually-hidden">Select</span></th><th>#</th><th>Speaker</th><th>Starts at</th><th>Clock time</th><th>Length</th><th>Size</th><th><span class="visually-hidden">Actions</span></th></tr>
           </thead>
           <tbody id="seg-body"></tbody>
         </table>
