@@ -445,3 +445,33 @@ Initial media support is YouTube embeds and browser-playable direct HTTP(S) vide
 ### Cloudflare notes
 
 The watch events endpoint uses the same public HTTP origin and does not require a new port or tunnel hostname. Cloudflare Tunnel supports WebSockets and SSE-style long-lived HTTP responses; the implementation currently uses SSE to avoid adding a second socket server. Keep the origin bound to the existing private/local host as configured. For local video uploads and large video delivery, choose a compliant storage/delivery path before enabling them: Cloudflare's public hostname upload limits and video-delivery terms apply. Do not assume an ordinary proxied Tunnel hostname is an unlimited video CDN.
+
+## Stremio → Watch Together (optional)
+
+Search anime / series / movies from Stremio addons on a dashboard page (`/stremio`) and send a stream to your Watch Together room.
+
+**How it works.** The bot talks the Stremio addon protocol: Kitsu (anime search + episode lists), Cinemeta, and Torrentio (streams). A stream is either
+a **direct https link** (what Torrentio returns when you add a debrid key; plays straight in every viewer's browser, zero load on your PC/tunnel) or a
+**torrent**, which your local Stremio streaming server downloads. Torrent streams are relayed to viewers through `/api/stremio/s/<random id>/…` on the
+dashboard (needs a dashboard sign-in; only paths the bot itself registered can be reached, the streaming server is never exposed).
+
+**Setup**
+1. Install Stremio (desktop app) or `stremio-service` on the bot's PC and start it. Check `http://127.0.0.1:11470/settings` opens in a browser.
+2. `.env`:
+
+        STREMIO_ENABLED=1
+        # optional, default shown
+        STREMIO_SERVER_URL=http://127.0.0.1:11470
+        # optional, ";"-separated manifest URLs. Default: Kitsu; Cinemeta; Torrentio
+        # With debrid, use your configured Torrentio URL from https://torrentio.strem.fun/configure :
+        # STREMIO_ADDONS=https://anime-kitsu.strem.fun/manifest.json;https://v3-cinemeta.strem.io/manifest.json;https://torrentio.strem.fun/realdebrid=YOUR_KEY/manifest.json
+
+3. Grant the new **`stremio`** permission (opt-in, not part of the Bot Admin preset): `!access grant <@user|id> stremio` or the User management page. Owners have it.
+4. Restart the bot. Join a Discord voice channel, open `/stremio`, search, pick an episode, **Send to room**, then press play on `/watch`.
+
+**Notes / limits**
+- Browsers cannot play every file. Many anime releases are HEVC 10-bit MKV with ASS subtitles; if the room shows "could not be played", send it again with **Transcode** ticked (uses the streaming server's HLS transcoder and the vendored hls.js; experimental) or pick an H.264/AAC release. Subtitles are not shown yet.
+- Torrent playback is relayed through your Cloudflare Tunnel, so every viewer's video uses your upload bandwidth, and Cloudflare's terms restrict serving large video through its proxy on free plans. Debrid direct links avoid both.
+- Only https stream URLs are accepted (browsers block http media on an https page). Streams you pick expire from the bot's memory after 30 min; proxy links after 12 h.
+- You are responsible for what you stream; use content you have the right to watch.
+- `public/vendor/hls.min.js` is hls.js 1.7.4 (Apache-2.0, license next to it).

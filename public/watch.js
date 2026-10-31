@@ -3,7 +3,8 @@ const $ = (id) => document.getElementById(id);
 const video = $("video");
 let user = null, rooms = [], active = null, sourceKey = "", applying = false, ytPlayer = null, ytReady = false, eventSource = null, lastState = null;
 let lastYtPosition = null, lastYtAt = 0, ytSeekSuppressUntil = 0;
-let pollTimer = null;
+let pollTimer = null, hls = null;
+function destroyHls() { if (hls) { try { hls.destroy(); } catch {} hls = null; } }
 const fmt = (n) => { n = Math.max(0, Math.floor(Number(n) || 0)); return `${Math.floor(n/60)}:${String(n%60).padStart(2,"0")}`; };
 async function api(url, options = {}) {
   let r; try { r = await fetch(url, { credentials:"same-origin", signal: AbortSignal.timeout(10000), ...options, headers:{ ...(options.body ? {"Content-Type":"application/json"}:{}), ...(options.headers||{}) } }); } catch (e) { throw new Error(e && e.name === "TimeoutError" ? "Server did not respond (timed out). Check the tunnel / Cloudflare rules for /api/watch/*." : (e && e.message) || "Network error"); }
@@ -53,14 +54,20 @@ async function loadMedia(media) {
   sourceKey = key; applying = true;
   $("empty-player").hidden = !!media; video.hidden = true; $("youtube-player").hidden = true;
   if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
+  destroyHls();
   if (!media) { video.removeAttribute("src"); video.load(); $("empty-player").hidden = false; applying = false; return; }
   if (media.kind === "youtube" && media.youtubeId) {
     $("youtube-player").hidden = false; await ensureYoutube();
     ytPlayer = new YT.Player("youtube-player", { videoId:media.youtubeId, width:"100%", height:"100%", playerVars:{playsinline:1,rel:0,enablejsapi:1,origin:window.location.origin}, events:{ onReady:() => { applying=false; if(lastState) applyPlayback(lastState.playback); }, onStateChange:(e) => { if(applying || !active) return; if(e.data === YT.PlayerState.PLAYING) send("play"); else if(e.data === YT.PlayerState.PAUSED) send("pause"); }, onPlaybackRateChange:(e) => { if(!applying && active) send("rate",{rate:Number(e.data)}); }, onAutoplayBlocked:() => { $("enable-playback").hidden=false; }, onError:(e) => { $("source-error").textContent = `YouTube could not play this video (error ${e.data}). It may block embedding, be private, or be age-restricted.`; applying=false; } } });
   } else {
-    video.hidden = false; video.controls = true; video.src = media.url; video.load();
+    video.hidden = false; video.controls = true;
     video.onloadedmetadata = () => { applying=false; if(lastState) applyPlayback(lastState.playback); };
-    video.onerror = () => { $("source-error").textContent = "This source could not be played by your browser. Try a direct MP4/WebM URL or a supported YouTube link."; applying=false; };
+    video.onerror = () => { $("source-error").textContent = "This source could not be played by your browser (unsupported container/codec is common for MKV/HEVC anime). Try another stream, or send it again with \"Transcode\" on the Stremio page."; applying=false; };
+    if (media.kind === "hls" && window.Hls && window.Hls.isSupported()) {
+      hls = new window.Hls({ enableWorker: false });
+      hls.on(window.Hls.Events.ERROR, (_e, data) => { if (data && data.fatal) { $("source-error").textContent = `Stream error (${data.details || "fatal"}). The stream may have expired; send it again.`; applying=false; } });
+      hls.loadSource(media.url); hls.attachMedia(video);
+    } else { video.src = media.url; video.load(); }
   }
 }
 function localPosition() { try { return ytPlayer ? ytPlayer.getCurrentTime() : video.currentTime || 0; } catch { return 0; } }
@@ -93,10 +100,10 @@ async function render(s) {
 }
 async function refreshRooms() {
   try {
-    const data = await api("/api/watch/me"); user = data.user; $("admin-card").hidden = !data.admin; rooms = data.rooms || [];
+    const data = await api("/api/watch/me"); user = data.user; $("admin-card").hidden = !data.admin; $("stremio-link").hidden = !data.stremio; rooms = data.rooms || [];
     if (!rooms.length) {
       stopEvents();
-      if (active) { applying=true; try { video.pause(); video.removeAttribute("src"); video.load(); if(ytPlayer) ytPlayer.destroy(); } catch {} ytPlayer=null; sourceKey=""; applying=false; }
+      if (active) { applying=true; try { destroyHls(); video.pause(); video.removeAttribute("src"); video.load(); if(ytPlayer) ytPlayer.destroy(); } catch {} ytPlayer=null; sourceKey=""; applying=false; }
       active = null; $("video").hidden=true; $("youtube-player").hidden=true; $("empty-player").hidden=false;
       $("room-title").textContent = "Join a Discord voice channel"; $("room-subtitle").textContent = "Once you join, this page automatically opens that channel's watch session.";
       $("room-select").hidden = true; $("participants").textContent = "Waiting for you to join voice…"; $("member-count").textContent="0";

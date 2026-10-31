@@ -5,7 +5,7 @@
   <title>Watch Together — Aboda Soundbot</title><link rel="stylesheet" href="/watch.css">
 </head>
 <body>
-  <header class="top"><a class="brand" href="/">ABODA <span>WATCH</span></a><div class="top-right"><span id="connection" class="status">Connecting…</span><a href="/" class="back">Dashboard</a></div></header>
+  <header class="top"><a class="brand" href="/">ABODA <span>WATCH</span></a><div class="top-right"><span id="connection" class="status">Connecting…</span><a id="stremio-link" href="/stremio" class="back" hidden>Stremio</a><a href="/" class="back">Dashboard</a></div></header>
   <main class="layout">
     <section class="main-column">
       <div class="room-head"><div><p class="eyebrow">DISCORD WATCH PARTY</p><h1 id="room-title">Finding your voice channel…</h1><p id="room-subtitle" class="muted">Join a Discord voice channel to enter its watch session.</p></div><select id="room-select" aria-label="Choose voice channel" hidden></select></div>
@@ -19,5 +19,6 @@
     </section>
     <aside class="sidebar"><section class="side-card"><div class="section-title"><div><p class="eyebrow">VOICE CHANNEL</p><h2>Watching together</h2></div><span id="member-count" class="count">0</span></div><div id="participants" class="participants"><p class="muted">Waiting for participants…</p></div></section><section class="side-card info"><h3>How it works</h3><p>Join the matching Discord voice channel and keep this page open. Playback changes are shared with everyone in that channel.</p><p>Video plays in each person's browser. Discord voice chat stays separate and continues normally.</p></section><section id="admin-card" class="side-card" hidden><p class="eyebrow">ADMIN</p><h3>Room controls</h3><p class="muted">Advanced room settings will be added after playback synchronization is stable.</p></section></aside>
   </main>
+  <script src="/vendor/hls.min.js"></script>
   <script src="/watch.js"></script>
 </body></html>

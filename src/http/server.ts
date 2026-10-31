@@ -18,6 +18,8 @@ import { parseCookies, serializeCookie } from "./auth/cookies.ts";
 import type { DiscordOAuth } from "./auth/discordOAuth.ts";
 import type { SessionStore } from "./auth/sessions.ts";
 import type { WatchManager } from "../watch/WatchManager.ts";
+import type { StremioService } from "../stremio/StremioService.ts";
+import { handleStremioRoute } from "../stremio/stremioRoutes.ts";
 
 /**
  * PUBLIC listener (default port 3939): the Cloudflare Tunnel origin.
@@ -55,6 +57,8 @@ export interface PublicDeps extends CoreDeps {
   /** Persistent bot-user grants, managed only by owners or explicitly delegated access managers. */
   accessPolicy?: AccessPolicy;
   watch?: WatchManager;
+  /** Optional Stremio search + stream proxy (page at /stremio + /api/stremio/*). Left out = those routes do not exist. */
+  stremio?: StremioService;
 }
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "public");
@@ -67,6 +71,7 @@ const STATIC: Record<string, StaticEntry> = {
   "/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
   "/watch": { file: "watch.html", type: "text/html; charset=utf-8", csp: "default-src 'none'; script-src 'self' https://www.youtube.com https://s.ytimg.com; style-src 'self'; img-src 'self' https://i.ytimg.com https://cdn.discordapp.com; media-src 'self' https: blob:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src 'self' https://www.youtube.com" },
   "/watch.js": { file: "watch.js", type: "text/javascript; charset=utf-8" },
+  "/vendor/hls.min.js": { file: "vendor/hls.min.js", type: "text/javascript; charset=utf-8" },
   "/watch.css": { file: "watch.css", type: "text/css; charset=utf-8" },
   // "My entrance sound": any signed-in dashboard user. The page plays previews from blob: URLs, hence media-src.
   "/entrance": {
@@ -117,17 +122,31 @@ const RECORDING_STATIC: Record<string, StaticEntry> = {
   "/recordings.css": { file: "recordings.css", type: "text/css; charset=utf-8" },
 };
 
+// Served only when the Stremio integration is on. Posters come from addon CDNs, hence img-src https:.
+const STREMIO_STATIC: Record<string, StaticEntry> = {
+  "/stremio": {
+    file: "stremio.html",
+    type: "text/html; charset=utf-8",
+    csp: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https:; connect-src 'self'",
+  },
+  "/stremio.js": { file: "stremio.js", type: "text/javascript; charset=utf-8" },
+  "/stremio.css": { file: "stremio.css", type: "text/css; charset=utf-8" },
+};
+
 // The only files served without a session: the sign-in page's stylesheet.
 const PUBLIC_ASSETS: Record<string, StaticEntry> = {
   "/login.css": { file: "login.css", type: "text/css; charset=utf-8" },
 };
 
-const PAGES = new Set(["/", "/entrance", "/import", "/logs", "/recordings", "/user-management", "/watch"]);
+const PAGES = new Set(["/", "/entrance", "/import", "/logs", "/recordings", "/user-management", "/watch", "/stremio"]);
 
 /** Which owner-granted permission a route needs, beyond being allowed onto the dashboard at all. */
 function requiredCapability(path: string): Capability | null {
   if (path === "/import" || path === "/import.js" || path === "/import.css" || path.startsWith("/api/import/")) return "import";
   if (path === "/recordings" || path === "/recordings.js" || path === "/recordings.css" || path.startsWith("/api/recordings")) return "recordings";
+  // The playback proxy is for every viewer in a watch room: it only needs a session. Everything else needs the grant.
+  if (path.startsWith("/api/stremio/s/")) return null;
+  if (path === "/stremio" || path === "/stremio.js" || path === "/stremio.css" || path.startsWith("/api/stremio/")) return "stremio";
   if (path === "/logs" || path === "/logs.js" || path === "/logs.css" || path.startsWith("/api/logs")) return "logs";
   if (["/user-management", "/user-management.js", "/user-management.css", "/api/access/users", "/api/access/users/update"].includes(path)) return "access.manage";
   return null;
@@ -288,6 +307,7 @@ export function createPublicServer(d: PublicDeps): Server {
     ...(d.importer ? IMPORT_STATIC : {}),
     ...(d.logs ? LOG_STATIC : {}),
     ...(d.recordings ? RECORDING_STATIC : {}),
+    ...(d.stremio ? STREMIO_STATIC : {}),
   };
 
   const server = createServer(async (req, res) => {
@@ -365,7 +385,7 @@ export function createPublicServer(d: PublicDeps): Server {
       };
 
       if (d.watch && url.pathname === "/api/watch/me" && req.method === "GET") {
-        return json(res, 200, { user: { id: uid, username: session.user.username }, rooms: d.watch.roomsForUser(uid), admin: d.can(uid, "access.manage") || d.can(uid, "entrance.manage") });
+        return json(res, 200, { user: { id: uid, username: session.user.username }, rooms: d.watch.roomsForUser(uid), stremio: !!d.stremio && d.can(uid, "stremio"), admin: d.can(uid, "access.manage") || d.can(uid, "entrance.manage") });
       }
       if (d.watch && url.pathname === "/api/watch/events" && req.method === "GET") {
         const guildId = url.searchParams.get("guildId") ?? "";
@@ -385,6 +405,13 @@ export function createPublicServer(d: PublicDeps): Server {
         if (!room) return json(res, 404, { error: "Watch session not found. Join its Discord voice channel first." });
         try { d.watch.command(room, uid, body); return json(res, 200, { ok: true }); }
         catch (err) { return json(res, 400, { error: (err as Error).message }); }
+      }
+
+      if (d.stremio && url.pathname.startsWith("/api/stremio/")) {
+        const handled = await handleStremioRoute(d.stremio, req, res, url, {
+          json, guard, readBody, headers: SECURITY_HEADERS, userId: uid, allowed: d.can(uid, "stremio"), ...(d.watch ? { watch: d.watch } : {}),
+        });
+        if (handled) return;
       }
 
       if (d.importer && url.pathname.startsWith("/api/import/")) {

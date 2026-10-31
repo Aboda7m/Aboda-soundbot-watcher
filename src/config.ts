@@ -12,6 +12,10 @@ export interface Config {
   ignoredLegacyHost: string;
   /** Public origin the browser sees, e.g. https://dash.example.com. Used for the OAuth redirect and cookie flags. */
   publicBaseUrl: string;
+  /** Stremio integration (Watch Together). Off by default. */
+  stremioEnabled: boolean;
+  stremioServerUrl: string;
+  stremioAddons: string[];
   discordClientId: string;
   discordClientSecret: string;
   /**
@@ -101,6 +105,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicHost: pub.host,
     ignoredLegacyHost: pub.ignored,
     publicBaseUrl: (env.PUBLIC_BASE_URL ?? "").trim().replace(/\/+$/, ""),
+    stremioEnabled: flag(env.STREMIO_ENABLED, false),
+    stremioServerUrl: (env.STREMIO_SERVER_URL ?? "").trim().replace(/\/+$/, "") || "http://127.0.0.1:11470",
+    // ";"-separated manifest URLs (commas are legal inside a Torrentio config URL, so they cannot separate).
+    stremioAddons: (env.STREMIO_ADDONS ?? "").trim()
+      ? (env.STREMIO_ADDONS ?? "").split(/[;\s]+/).map((x) => x.trim()).filter(Boolean)
+      : ["https://anime-kitsu.strem.fun/manifest.json", "https://v3-cinemeta.strem.io/manifest.json", "https://torrentio.strem.fun/manifest.json"],
     discordClientId: (env.DISCORD_CLIENT_ID ?? "").trim(),
     discordClientSecret: (env.DISCORD_CLIENT_SECRET ?? "").trim(),
     dashboardUserIds: list(env.DASHBOARD_ALLOWED_USER_IDS),

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stremio — Aboda Soundbot</title><link rel="stylesheet" href="/stremio.css">
+</head>
+<body>
+  <header class="top"><a class="brand" href="/">ABODA <span>STREMIO</span></a><div class="top-right"><a href="/watch" class="back">Watch Together</a><a href="/" class="back">Dashboard</a></div></header>
+  <main class="wrap">
+    <form id="search-form" class="search"><input id="q" type="search" placeholder="Search anime, series or movies…" autocomplete="off" required minlength="2" maxlength="100"><button class="primary" type="submit">Search</button></form>
+    <p id="msg" class="msg" role="status"></p>
+    <section id="results" class="grid" aria-label="Search results"></section>
+
+    <section id="detail" class="detail" hidden>
+      <div class="detail-head">
+        <img id="d-poster" alt="" hidden>
+        <div><h2 id="d-title"></h2><p id="d-sub" class="muted"></p><p id="d-desc" class="desc"></p></div>
+        <button id="d-close" type="button" class="ghost" aria-label="Close">✕</button>
+      </div>
+      <div class="room-row"><label>Send to room <select id="room"></select></label><label class="check"><input id="transcode" type="checkbox"> Transcode for browsers (torrent streams, experimental)</label><span id="room-note" class="muted"></span></div>
+      <div class="eps-head"><h3>Episodes</h3><select id="season" aria-label="Season" hidden></select></div>
+      <div id="eps" class="eps"></div>
+      <div id="streams-box" hidden>
+        <h3 id="streams-title">Streams</h3>
+        <p class="muted small">“Direct” links come from a debrid service and play in everyone's browser. “Torrent” streams are downloaded by the bot's PC and relayed to the room.</p>
+        <div id="streams" class="streams"></div>
+      </div>
+    </section>
+  </main>
+  <script src="/stremio.js"></script>
+</body></html>

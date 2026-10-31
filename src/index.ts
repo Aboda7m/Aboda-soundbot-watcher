@@ -26,6 +26,7 @@ import { checkYtDlp } from "./tools/ytdlp.ts";
 import { DiscordVoiceAdapter } from "./voice/DiscordVoiceAdapter.ts";
 import { Watcher } from "./watcher/Watcher.ts";
 import { WatchManager } from "./watch/WatchManager.ts";
+import { StremioService } from "./stremio/StremioService.ts";
 
 const config = loadConfig();
 if (!config.token) {
@@ -370,11 +371,16 @@ const authorizer = createAuthorizer({
 });
 const oauthReady = !!(config.publicBaseUrl && config.discordClientId && config.discordClientSecret);
 const publicBase = config.publicBaseUrl || `http://localhost:${config.publicPort}`;
+const stremio = config.stremioEnabled
+  ? new StremioService({ addonUrls: config.stremioAddons, serverUrl: config.stremioServerUrl, publicBase, log: (m) => console.warn(m) })
+  : undefined;
+if (stremio) console.log(`Stremio: on (streaming server ${config.stremioServerUrl}, ${config.stremioAddons.length} addon(s)); grant the "stremio" permission to users who may use /stremio.`);
 const publicServer = createPublicServer({
   ...core,
   discordClient: client,
   accessPolicy: access,
   watch,
+  ...(stremio ? { stremio } : {}),
   publicBaseUrl: publicBase,
   sessions,
   oauth: oauthReady

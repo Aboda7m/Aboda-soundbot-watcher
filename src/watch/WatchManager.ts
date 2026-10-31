@@ -8,7 +8,7 @@ export interface WatchParticipant {
   guildId: string;
   joinedAt: number;
 }
-export interface WatchMedia { url: string; title: string; kind: "html5" | "youtube"; youtubeId?: string; }
+export interface WatchMedia { url: string; title: string; kind: "html5" | "youtube" | "hls"; youtubeId?: string; }
 export interface WatchRoomSnapshot {
   guildId: string; guildName: string; channelId: string; channelName: string;
   media: WatchMedia | null;
@@ -114,10 +114,9 @@ export class WatchManager {
         }
         if (isIP(host) === 6 && (host === "::" || host === "::1" || host.toLowerCase().startsWith("fc") || host.toLowerCase().startsWith("fd") || host.toLowerCase().startsWith("fe80:"))) throw new Error("Private-network media URLs are not allowed.");
         const yt = youtubeId(url);
-        if (!yt && parsed.pathname.toLowerCase().endsWith(".m3u8")) throw new Error("HLS playback is not enabled in this first version. Use a direct MP4/WebM URL or YouTube.");
         if (["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "youtube-nocookie.com", "www.youtube-nocookie.com"].includes(host) && !yt) throw new Error("That YouTube URL does not contain a valid video ID.");
         if (yt && !/^[A-Za-z0-9_-]{11}$/.test(yt)) throw new Error("That YouTube URL does not contain a valid video ID.");
-        room.media = { url, title: String(command.title ?? (yt ? "YouTube video" : "Shared video")).slice(0, 180), kind: yt ? "youtube" : "html5", ...(yt ? { youtubeId: yt } : {}) };
+        room.media = { url, title: String(command.title ?? (yt ? "YouTube video" : "Shared video")).slice(0, 180), kind: yt ? "youtube" : parsed.pathname.toLowerCase().endsWith(".m3u8") ? "hls" : "html5", ...(yt ? { youtubeId: yt } : {}) };
         room.playback = { paused: true, position: 0, playbackRate: 1, updatedAt: now }; break;
       }
       default: throw new Error("Unknown watch command.");
