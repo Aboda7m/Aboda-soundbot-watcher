@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { TrackService } from "./TrackService.ts";
 
 /**
  * Stremio addon protocol client + a small authenticated proxy to a local Stremio streaming server.
@@ -33,7 +34,7 @@ export interface StreamItem {
   ref: string; addon: string; kind: "torrent" | "url"; name: string; title: string;
   quality?: string; size?: string; seeders?: number; filename?: string;
 }
-export interface Playback { url: string; title: string; mode: "direct" | "torrent" | "torrent-hls" }
+export interface Playback { url: string; title: string; mode: "direct" | "torrent" | "torrent-hls"; /** Source id for subtitle/audio tracks (see TrackService). */ tracksId?: string }
 
 interface RawStream {
   url?: string; infoHash?: string; fileIdx?: number; sources?: string[];
@@ -50,6 +51,8 @@ export interface StremioOptions {
   /** Public https origin viewers use (PUBLIC_BASE_URL). */
   publicBase: string;
   fetchImpl?: typeof fetch;
+  /** Optional: lists and extracts subtitle / audio tracks with FFmpeg. */
+  tracks?: TrackService;
   log?: (msg: string) => void;
   refTtlMs?: number;
   proxyTtlMs?: number;
@@ -152,6 +155,7 @@ export class StremioService {
   }
 
   get serverUrl() { return this.#opts.serverUrl; }
+  get tracks() { return this.#opts.tracks; }
 
   async #json(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
     const r = await this.#fetch(url, { ...init, signal: AbortSignal.timeout(this.#opts.requestTimeoutMs), headers: { Accept: "application/json", ...(init?.headers ?? {}) } });
@@ -265,7 +269,7 @@ export class StremioService {
     const title = (parsed?.title ?? "Stream").slice(0, 180);
 
     const direct = s.url ? httpsUrl(s.url) : undefined;
-    if (direct) return { url: direct, title, mode: "direct" };
+    if (direct) return { url: direct, title, mode: "direct", ...(this.#opts.tracks ? { tracksId: this.#opts.tracks.register(direct) } : {}) };
 
     const hash = String(s.infoHash ?? "").toLowerCase();
     if (!HASH.test(hash)) throw new StremioError(400, "This stream cannot be played.");
@@ -290,10 +294,10 @@ export class StremioService {
       q.set("mediaURL", `${this.serverUrl}${rawPath}`);
       q.append("videoCodecs", "h264"); q.append("audioCodecs", "aac"); q.set("maxAudioChannels", "2");
       this.#addProxy(id, { kind: "hls", base: `/hlsv2/${session}/`, masterQuery: q.toString(), expires });
-      return { url: `${this.#opts.publicBase}/api/stremio/s/${id}/master.m3u8`, title, mode: "torrent-hls" };
+      return { url: `${this.#opts.publicBase}/api/stremio/s/${id}/master.m3u8`, title, mode: "torrent-hls", ...(this.#opts.tracks ? { tracksId: this.#opts.tracks.register(`${this.serverUrl}${rawPath}`) } : {}) };
     }
     this.#addProxy(id, { kind: "raw", path: rawPath, filename: filename || "stream", expires });
-    return { url: `${this.#opts.publicBase}/api/stremio/s/${id}/${filename || "stream"}`, title, mode: "torrent" };
+    return { url: `${this.#opts.publicBase}/api/stremio/s/${id}/${filename || "stream"}`, title, mode: "torrent", ...(this.#opts.tracks ? { tracksId: this.#opts.tracks.register(`${this.serverUrl}${rawPath}`) } : {}) };
   }
 
   #addProxy(id: string, e: ProxyEntry) {

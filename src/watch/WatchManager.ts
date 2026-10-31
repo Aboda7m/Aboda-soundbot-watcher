@@ -1,5 +1,6 @@
 import type { ServerResponse } from "node:http";
 import { isIP } from "node:net";
+import type { PublicTracks } from "../stremio/TrackService.ts";
 
 export interface WatchParticipant {
   userId: string;
@@ -8,7 +9,7 @@ export interface WatchParticipant {
   guildId: string;
   joinedAt: number;
 }
-export interface WatchMedia { url: string; title: string; kind: "html5" | "youtube" | "hls"; youtubeId?: string; }
+export interface WatchMedia { url: string; title: string; kind: "html5" | "youtube" | "hls"; youtubeId?: string; /** Subtitle / audio tracks found inside the file (filled in shortly after the media is set). */ tracks?: PublicTracks; }
 export interface WatchRoomSnapshot {
   guildId: string; guildName: string; channelId: string; channelName: string;
   media: WatchMedia | null;
@@ -122,6 +123,11 @@ export class WatchManager {
       default: throw new Error("Unknown watch command.");
     }
     room.updatedAt = now; this.broadcast(room);
+  }
+  /** Attach the tracks found in the current media to the room, unless the media has changed meanwhile. */
+  setTracks(room: Room, mediaUrl: string, tracks: PublicTracks) {
+    if (!room.media || room.media.url !== mediaUrl) return;
+    room.media.tracks = tracks; room.updatedAt = Date.now(); this.broadcast(room);
   }
   broadcast(room: Room) {
     const data = `event: state\ndata: ${JSON.stringify(this.snapshot(room))}\n\n`;

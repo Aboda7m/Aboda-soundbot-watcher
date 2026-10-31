@@ -145,7 +145,7 @@ function requiredCapability(path: string): Capability | null {
   if (path === "/import" || path === "/import.js" || path === "/import.css" || path.startsWith("/api/import/")) return "import";
   if (path === "/recordings" || path === "/recordings.js" || path === "/recordings.css" || path.startsWith("/api/recordings")) return "recordings";
   // The playback proxy is for every viewer in a watch room: it only needs a session. Everything else needs the grant.
-  if (path.startsWith("/api/stremio/s/")) return null;
+  if (path.startsWith("/api/stremio/s/") || path.startsWith("/api/stremio/t/")) return null;
   if (path === "/stremio" || path === "/stremio.js" || path === "/stremio.css" || path.startsWith("/api/stremio/")) return "stremio";
   if (path === "/logs" || path === "/logs.js" || path === "/logs.css" || path.startsWith("/api/logs")) return "logs";
   if (["/user-management", "/user-management.js", "/user-management.css", "/api/access/users", "/api/access/users/update"].includes(path)) return "access.manage";

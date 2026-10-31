@@ -4,6 +4,87 @@ const video = $("video");
 let user = null, rooms = [], active = null, sourceKey = "", applying = false, ytPlayer = null, ytReady = false, eventSource = null, lastState = null;
 let lastYtPosition = null, lastYtAt = 0, ytSeekSuppressUntil = 0;
 let pollTimer = null, hls = null;
+// ---- subtitle / audio tracks (found inside the file by the bot; choices are per viewer, not shared) ----
+const altAudio = $("alt-audio");
+let tracksSig = "", altActive = false, audioReq = 0, mutedByUs = false, volWanted = 1;
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function stopAltAudio() {
+  altActive = false; audioReq++;
+  try { altAudio.pause(); altAudio.removeAttribute("src"); altAudio.load(); } catch {}
+  if (mutedByUs) { video.muted = false; mutedByUs = false; }
+  $("vol-label").hidden = true;
+}
+function clearTracks() {
+  tracksSig = ""; for (const t of video.querySelectorAll("track")) t.remove();
+  stopAltAudio(); $("tracks-row").hidden = true; $("track-note").textContent = "";
+  $("sub-select").replaceChildren(new Option("Off", "off")); $("audio-select").replaceChildren(new Option("Original", "default"));
+}
+function applyTracks(media) {
+  const t = media && media.tracks; const sig = t ? JSON.stringify(t) : "";
+  if (sig === tracksSig) return;
+  tracksSig = sig; if (!t) return;
+  const subs = t.subs || [], audio = t.audio || [];
+  const subSel = $("sub-select"); subSel.replaceChildren(new Option("Off", "off"));
+  for (const s of subs) { const o = new Option(s.supported ? s.label : `${s.label} — not supported`, String(s.id)); o.disabled = !s.supported; subSel.append(o); }
+  const audioSel = $("audio-select"); audioSel.replaceChildren();
+  const def = audio.find((a) => a.default) || audio[0];
+  for (const a of audio) audioSel.append(new Option(a === def ? `${a.label} · default` : a.label, a === def ? "default" : String(a.id)));
+  $("audio-label").hidden = audio.length < 2;
+  $("tracks-row").hidden = !subs.length && audio.length < 2;
+  const pref = store.get("watch.sub");
+  if (pref && pref !== "off") {
+    const m = subs.find((s) => s.supported && s.lang === pref && !s.forced) || subs.find((s) => s.supported && s.lang === pref);
+    if (m) { subSel.value = String(m.id); selectSub(); }
+  }
+}
+function selectSub() {
+  for (const t of video.querySelectorAll("track")) t.remove();
+  const v = $("sub-select").value, note = $("track-note"); note.textContent = "";
+  if (v === "off") { store.set("watch.sub", "off"); return; }
+  const s = ((lastState && lastState.media && lastState.media.tracks && lastState.media.tracks.subs) || []).find((x) => String(x.id) === v);
+  if (!s || !s.url) return;
+  store.set("watch.sub", s.lang);
+  const el = document.createElement("track"); el.kind = "subtitles"; el.label = s.label; el.default = true; el.src = s.url;
+  note.textContent = "Loading subtitles (the first time the bot reads the whole file; this can take a minute)…";
+  el.addEventListener("load", () => { note.textContent = ""; });
+  el.addEventListener("error", () => { note.textContent = "Subtitles could not be loaded."; });
+  video.append(el); el.track.mode = "showing";
+}
+async function selectAudio() {
+  const v = $("audio-select").value; stopAltAudio(); const mine = audioReq;
+  if (v === "default") return;
+  const a = ((lastState && lastState.media && lastState.media.tracks && lastState.media.tracks.audio) || []).find((x) => String(x.id) === v);
+  if (!a) return;
+  const note = $("track-note"); let ready = false;
+  for (let i = 0; i < 400 && !ready; i++) {
+    if (mine !== audioReq) return;
+    note.textContent = "Preparing this audio track (the bot reads the whole file once; everyone shares the result)…";
+    let r; try { r = await fetch(a.url, { headers: { Range: "bytes=0-0" }, credentials: "same-origin" }); } catch { await sleep(3000); continue; }
+    if (r.status === 202) { await sleep(3000); continue; }
+    if (r.status === 200 || r.status === 206) { ready = true; break; }
+    note.textContent = "This audio track could not be prepared."; $("audio-select").value = "default"; return;
+  }
+  if (mine !== audioReq || !ready) return;
+  note.textContent = "";
+  altAudio.src = a.url; altAudio.volume = volWanted; altAudio.load();
+  altActive = true; mutedByUs = !video.muted; video.muted = true; $("vol-label").hidden = false; syncAlt(true);
+}
+function syncAlt(force) {
+  if (!altActive) return;
+  try {
+    if (video.paused || video.seeking || video.readyState < 3) { if (!altAudio.paused) altAudio.pause(); }
+    else if (altAudio.paused) altAudio.play().catch(() => {});
+    if (altAudio.playbackRate !== video.playbackRate) altAudio.playbackRate = video.playbackRate;
+    if (force || Math.abs(altAudio.currentTime - video.currentTime) > 0.35) altAudio.currentTime = video.currentTime;
+  } catch {}
+}
+$("sub-select").addEventListener("change", selectSub);
+$("audio-select").addEventListener("change", selectAudio);
+$("vol").addEventListener("input", () => { volWanted = Number($("vol").value); altAudio.volume = volWanted; });
+for (const ev of ["play", "pause", "seeked", "seeking", "waiting", "playing", "ratechange"]) video.addEventListener(ev, () => syncAlt(ev === "seeked"));
+video.addEventListener("volumechange", () => { if (altActive && !video.muted) video.muted = true; });   // the Volume slider controls the alternative audio
+setInterval(() => syncAlt(false), 500);
 function destroyHls() { if (hls) { try { hls.destroy(); } catch {} hls = null; } }
 const fmt = (n) => { n = Math.max(0, Math.floor(Number(n) || 0)); return `${Math.floor(n/60)}:${String(n%60).padStart(2,"0")}`; };
 async function api(url, options = {}) {
@@ -51,7 +132,7 @@ function ensureYoutube() {
 async function loadMedia(media) {
   const key = media ? `${media.kind}:${media.url}` : "";
   if (key === sourceKey) return;
-  sourceKey = key; applying = true;
+  sourceKey = key; applying = true; clearTracks();
   $("empty-player").hidden = !!media; video.hidden = true; $("youtube-player").hidden = true;
   if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
   destroyHls();
@@ -96,6 +177,7 @@ async function render(s) {
   lastState = s; renderParticipants(s);
   if (s.media) await loadMedia(s.media); else await loadMedia(null);
   if (s.playback) applyPlayback(s.playback);
+  applyTracks(s.media);
   $("room-title").textContent = s.channelName; $("room-subtitle").textContent = `${s.guildName} · ${s.participants.length} participant${s.participants.length===1?"":"s"}`;
 }
 async function refreshRooms() {
@@ -103,7 +185,7 @@ async function refreshRooms() {
     const data = await api("/api/watch/me"); user = data.user; $("admin-card").hidden = !data.admin; $("stremio-link").hidden = !data.stremio; rooms = data.rooms || [];
     if (!rooms.length) {
       stopEvents();
-      if (active) { applying=true; try { destroyHls(); video.pause(); video.removeAttribute("src"); video.load(); if(ytPlayer) ytPlayer.destroy(); } catch {} ytPlayer=null; sourceKey=""; applying=false; }
+      if (active) { clearTracks(); applying=true; try { destroyHls(); video.pause(); video.removeAttribute("src"); video.load(); if(ytPlayer) ytPlayer.destroy(); } catch {} ytPlayer=null; sourceKey=""; applying=false; }
       active = null; $("video").hidden=true; $("youtube-player").hidden=true; $("empty-player").hidden=false;
       $("room-title").textContent = "Join a Discord voice channel"; $("room-subtitle").textContent = "Once you join, this page automatically opens that channel's watch session.";
       $("room-select").hidden = true; $("participants").textContent = "Waiting for you to join voice…"; $("member-count").textContent="0";
