@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { open, readFile, readdir, stat, mkdtemp, rm } from "node:fs/promises";
+import { open, readFile, readdir, stat, mkdtemp, rm, link, copyFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { SECURITY_HEADERS, SNOWFLAKE } from "./common.ts";
@@ -509,9 +509,19 @@ async function exportMp3(
   const workDir = await mkdtemp(join(tmpdir(), "aboda-recording-export-"));
   const output = join(workDir, "recording.mp3");
   try {
+    // Windows limits a command line to ~32k characters; 190+ inputs with long absolute paths blow past that.
+    // So: short relative input names (hard link, or copy as a fallback) + the filter graph in a script file.
+    const names: string[] = [];
+    for (let i = 0; i < clips.length; i++) {
+      const name = `c${i}.ogg`;
+      const dest = join(workDir, name);
+      try { await link(clips[i]!.path, dest); } catch { await copyFile(clips[i]!.path, dest); }
+      names.push(name);
+    }
     const args = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-threads", "1"];
-    for (const clip of clips) args.push("-i", clip.path);
+    for (const name of names) args.push("-i", name);
     const filters: string[] = [];
+    const labels: string[] = [];
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i]!;
       const localStart = Math.max(0, rangeStart - clip.offset);
@@ -519,22 +529,32 @@ async function exportMp3(
       const delay = Math.max(0, Math.round((clip.offset - rangeStart) * 1000));
       if (localEnd <= localStart) continue;
       filters.push(`[${i}:a]atrim=start=${localStart.toFixed(3)}:end=${localEnd.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${delay}|${delay}[a${i}]`);
+      labels.push(`[a${i}]`);
     }
-    const labels = clips.map((_, i) => `[a${i}]`).join("");
-    filters.push(`${labels}amix=inputs=${clips.length}:duration=longest:dropout_transition=0:normalize=0,apad=pad_dur=${(rangeEnd - rangeStart).toFixed(3)},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,alimiter=limit=0.95[out]`);
+    if (!labels.length) throw Object.assign(new Error("No selected audio overlaps this time range."), { status: 422 });
+    filters.push(`${labels.join("")}amix=inputs=${labels.length}:duration=longest:dropout_transition=0:normalize=0,apad=pad_dur=${(rangeEnd - rangeStart).toFixed(3)},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,alimiter=limit=0.95[out]`);
+    await writeFile(join(workDir, "filter.txt"), filters.join(";\n"), "utf8");
     args.push(
-      "-filter_complex", filters.join(";"), "-map", "[out]", "-t", (rangeEnd - rangeStart).toFixed(3),
+      "-filter_complex_script", "filter.txt", "-map", "[out]", "-t", (rangeEnd - rangeStart).toFixed(3),
       "-vn", "-sn", "-dn", "-map_metadata", "-1", "-ar", "48000", "-ac", "2",
-      "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3", output,
+      "-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3", "recording.mp3",
     );
     try {
       await execFileAsync(files.ffmpegPath, args, {
+        cwd: workDir,
         timeout: Math.min(15 * 60_000, Math.max(60_000, (rangeEnd - rangeStart) * 3000)),
-        killSignal: "SIGKILL", maxBuffer: 2 * 1024 * 1024, windowsHide: true,
+        killSignal: "SIGKILL", maxBuffer: 8 * 1024 * 1024, windowsHide: true,
       });
     } catch (err) {
-      console.error("Recording MP3 export failed:", err instanceof Error ? err.message : err);
-      throw Object.assign(new Error("FFmpeg could not mix this recording. Check that FFmpeg includes the MP3 encoder (libmp3lame)."), { status: 422 });
+      const e = err as { message?: string; stderr?: string };
+      const detail = String(e.stderr || e.message || err).trim();
+      console.error("Recording MP3 export failed:", detail.slice(-2000));
+      const hint = /Unknown encoder|libmp3lame/i.test(detail)
+        ? "Check that FFmpeg includes the MP3 encoder (libmp3lame)."
+        : /normalize|No such filter|Option not found/i.test(detail)
+          ? "This FFmpeg is too old (needs 4.4+)."
+          : "See the server console for the FFmpeg error.";
+      throw Object.assign(new Error(`FFmpeg could not mix this recording. ${hint}`), { status: 422 });
     }
     const info = await stat(output);
     if (!info.size) throw Object.assign(new Error("FFmpeg produced an empty MP3."), { status: 422 });
