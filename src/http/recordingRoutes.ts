@@ -120,6 +120,32 @@ function participantsOf(manifest: Record<string, unknown> | null): Record<string
   return Array.isArray(list) ? list.filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null) : [];
 }
 
+/**
+ * Entrance recordings keep the outgoing sound as its own file next to the participant tracks and name it in
+ * `outputs.sound`. Anything else about it is optional: a damaged record just means "no sound track".
+ */
+function soundOf(manifest: Record<string, unknown> | null): { file: string; name: string | undefined; startedAt: number | null } | null {
+  const outputs = manifest?.outputs;
+  const sound = typeof outputs === "object" && outputs !== null ? (outputs as Record<string, unknown>).sound : null;
+  if (typeof sound !== "object" || sound === null || Array.isArray(sound)) return null;
+  const rec = sound as Record<string, unknown>;
+  const file = asString(rec.file, 300);
+  return file ? { file: basename(file), name: asString(rec.name), startedAt: asTime(rec.startedAt) } : null;
+}
+
+function entranceOf(manifest: Record<string, unknown> | null): { entrantId: string | null; entrantName: string | null; soundName: string | null } | null {
+  if (manifest?.type !== "entrance") return null;
+  const e = manifest.entrant;
+  const entrant = typeof e === "object" && e !== null && !Array.isArray(e) ? (e as Record<string, unknown>) : {};
+  return {
+    entrantId: asString(entrant.userId, 30) ?? null,
+    entrantName: asString(entrant.username) ?? null,
+    soundName: asString(manifest.soundName) ?? soundOf(manifest)?.name ?? null,
+  };
+}
+
+const soundLabel = (name: string | null | undefined) => (name ? `Entrance sound: ${name}` : "Entrance sound");
+
 const sessionCache = new Map<string, RawSession>();
 
 async function readSession(guildId: string, dir: string, now: number): Promise<RawSession | null> {
@@ -346,8 +372,14 @@ function summarize(s: RawSession, r: Resolver, now: number) {
     if (uid && name && !manifestNames.has(uid)) manifestNames.set(uid, name);
   }
 
+  // The entrance sound is a track of its own, not a speaker: it is left out of the speaker list and the segment count
+  // (so an entrance nobody reacted to counts as "no speech"), but its size still counts.
+  const sound = soundOf(s.manifest);
+  const entrance = entranceOf(s.manifest);
+  const speech = sound ? s.tracks.filter((t) => t.name !== sound.file) : s.tracks;
+
   const bySpeaker = new Map<string, { id: string | null; name: string | null; segments: number; bytes: number }>();
-  for (const t of s.tracks) {
+  for (const t of speech) {
     const key = t.userId ?? "unknown";
     const cur = bySpeaker.get(key) ?? { id: t.userId, name: r.user(t.userId, t.userId ? manifestNames.get(t.userId) : undefined), segments: 0, bytes: 0 };
     cur.segments++;
@@ -368,8 +400,12 @@ function summarize(s: RawSession, r: Resolver, now: number) {
     durationSec,
     status,
     initiatedBy: initiator ? { id: initiator, name: r.user(initiator, asString(s.manifest?.initiatedByName) ?? manifestNames.get(initiator)) } : null,
+    type: entrance ? "entrance" : "manual",
+    entrance: entrance
+      ? { entrantId: entrance.entrantId, entrantName: r.user(entrance.entrantId, entrance.entrantName ?? undefined), soundName: entrance.soundName }
+      : null,
     speakers: [...bySpeaker.values()].sort((a, b) => b.bytes - a.bytes),
-    segments: s.tracks.length,
+    segments: speech.length,
     bytes: s.tracks.reduce((sum, t) => sum + t.bytes, 0),
   };
 }
@@ -495,6 +531,8 @@ async function exportMp3(
     const started = asTime(rec.startedAt);
     if (file && started !== null) starts.set(basename(file), started);
   }
+  const exportSound = soundOf(manifest);
+  if (exportSound?.startedAt != null) starts.set(exportSound.file, exportSound.startedAt);
 
   const clips: { path: string; offset: number; duration: number; file: string }[] = [];
   for (const track of chosen) {
@@ -665,7 +703,7 @@ export async function handleRecordingRoute(
         notFound();
         return true;
       }
-      const who = resolver.user(track.userId) ?? track.userId ?? "speaker";
+      const who = track.name === soundOf(session.manifest)?.file ? "entrance_sound" : (resolver.user(track.userId) ?? track.userId ?? "speaker");
       serveAudio(req, res, track, url.searchParams.get("download") === "1" ? `${session.id}_${who}_${track.n ?? 0}` : null);
       return true;
     }
@@ -677,6 +715,8 @@ export async function handleRecordingRoute(
       const file = asString(rec.file, 300);
       if (file) manifestTracks.set(basename(file), { startedAt: asTime(rec.startedAt), username: asString(rec.username) });
     }
+    const sound = soundOf(session.manifest);
+    if (sound) manifestTracks.set(sound.file, { startedAt: sound.startedAt });
 
     const tracks = await Promise.all(
       session.tracks.map(async (t) => {
@@ -684,10 +724,12 @@ export async function handleRecordingRoute(
         const m = manifestTracks.get(t.name);
         // Start of the segment: the manifest's time, else when the file was created (Windows keeps this), else end minus length.
         const startMs = m?.startedAt ?? (t.birthtimeMs > 0 ? t.birthtimeMs : t.mtimeMs - (durationSec ?? 0) * 1000);
+        const isSound = sound !== null && t.name === sound.file;
         return {
           file: t.name,
-          userId: t.userId,
-          username: resolver.user(t.userId, m?.username),
+          kind: isSound ? "sound" : "speech",
+          userId: isSound ? null : t.userId,
+          username: isSound ? soundLabel(sound.name) : resolver.user(t.userId, m?.username),
           n: t.n,
           bytes: t.bytes,
           durationSec: durationSec === null ? null : Math.round(durationSec * 1000) / 1000,

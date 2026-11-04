@@ -6,12 +6,14 @@ import {
   joinVoiceChannel,
   VoiceConnectionStatus,
   type AudioPlayer,
+  type AudioResource,
   type VoiceConnection,
 } from "@discordjs/voice";
 import type { Client } from "discord.js";
+import { EntranceCapture, entranceRecordingConfig } from "../recording/EntranceCapture.ts";
 import { recordingManager } from "../recording/RecordingManager.ts";
 import { createResource } from "./AudioProvider.ts";
-import type { VoicePort } from "./VoicePort.ts";
+import type { PlayOptions, VoicePort } from "./VoicePort.ts";
 
 const READY_TIMEOUT_MS = 15_000;
 const START_TIMEOUT_MS = 15_000;
@@ -37,6 +39,8 @@ export class DiscordVoiceAdapter implements VoicePort {
   #isPinned: (guildId: string) => boolean;
   #group: string;
   #guilds = new Map<string, GuildVoice>();
+  /** Entrance recordings this bot is making right now (each lives inside one `play()` call). */
+  #captures = new Set<EntranceCapture>();
 
   constructor(client: Client, options: DiscordVoiceAdapterOptions = {}) {
     this.#client = client;
@@ -44,11 +48,33 @@ export class DiscordVoiceAdapter implements VoicePort {
     this.#isPinned = options.isPinned ?? ((guildId) => recordingManager.isRecording(guildId));
   }
 
-  async play(guildId: string, channelId: string, filePath: string, maxDurationSec?: number, onStarted?: () => void): Promise<void> {
-    const { player } = await this.#ensure(guildId, channelId);
+  async play(guildId: string, channelId: string, filePath: string, maxDurationSec?: number, onStarted?: () => void, options?: PlayOptions): Promise<void> {
+    const { player, connection } = await this.#ensure(guildId, channelId);
     const resource = createResource(filePath);
 
-    await new Promise<void>((resolve, reject) => {
+    // Entrance recording: this same bot, this same connection. Best effort, it never decides whether the sound plays.
+    const capture = this.#newCapture(guildId, channelId, connection, options);
+    if (capture) {
+      this.#captures.add(capture);
+      capture.tap(resource);
+    }
+
+    try {
+      try {
+        await this.#playResource(player, resource, maxDurationSec, onStarted, capture);
+      } catch (err) {
+        await capture?.finish(true); // playback broke down: save what exists, no tail
+        throw err;
+      }
+      // The tail is part of this call: the bot stays claimed (and in this channel) until the recording is saved.
+      await capture?.finish();
+    } finally {
+      if (capture) this.#captures.delete(capture);
+    }
+  }
+
+  #playResource(player: AudioPlayer, resource: AudioResource, maxDurationSec: number | undefined, onStarted: (() => void) | undefined, capture: EntranceCapture | null): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       let started = false;
       let durationTimer: NodeJS.Timeout | null = null;
       const startTimer = setTimeout(() => {
@@ -62,6 +88,7 @@ export class DiscordVoiceAdapter implements VoicePort {
           if (!started) {
             started = true;
             clearTimeout(startTimer);
+            capture?.begin(); // capture starts exactly when the sound does
             onStarted?.();
             if (Number.isInteger(maxDurationSec) && maxDurationSec! >= 1 && maxDurationSec! <= 30) {
               durationTimer = setTimeout(() => player.stop(true), maxDurationSec! * 1000);
@@ -69,6 +96,7 @@ export class DiscordVoiceAdapter implements VoicePort {
             }
           }
         } else if (next.status === AudioPlayerStatus.Idle && started) {
+          capture?.playbackEnded(); // playback actually finished (also after a skip or the duration cap)
           cleanup();
           resolve();
         }
@@ -89,6 +117,48 @@ export class DiscordVoiceAdapter implements VoicePort {
       player.on("error", onError);
       player.play(resource);
     });
+  }
+
+  /** Builds the entrance capture for this sound, or null (feature off, not an entrance, or anything went wrong). */
+  #newCapture(guildId: string, channelId: string, connection: VoiceConnection, options?: PlayOptions): EntranceCapture | null {
+    const request = options?.captureEntrance;
+    if (!request) return null;
+    try {
+      const cfg = entranceRecordingConfig();
+      if (!cfg.enabled) return null;
+
+      const guild = this.#client.guilds.cache.get(guildId);
+      const channel = guild?.channels.cache.get(channelId);
+      const botId = this.#client.user?.id ?? "";
+      const userName = (id: string): string | undefined =>
+        guild?.members.cache.get(id)?.displayName || this.#client.users.cache.get(id)?.username || undefined;
+
+      const channelParticipants =
+        channel?.isVoiceBased()
+          ? [...channel.members.values()]
+              .filter((m) => m.id !== botId)
+              .map((m) => ({ userId: m.id, ...(m.displayName ? { username: m.displayName } : {}), ...(m.user.bot ? { bot: true } : {}) }))
+          : [];
+
+      const entrantName = request.entrant ? request.entrant.username || userName(request.entrant.userId) : undefined;
+      return new EntranceCapture({
+        guildId,
+        channelId,
+        connection,
+        soundName: request.soundName,
+        botUserId: botId || guildId,
+        ...(request.entrant ? { entrant: { userId: request.entrant.userId, ...(entrantName ? { username: entrantName } : {}) } } : {}),
+        ...(guild?.name ? { guildName: guild.name } : {}),
+        ...(channel?.name ? { channelName: channel.name } : {}),
+        channelParticipants,
+        resolveUserName: userName,
+        tailMs: cfg.tailMs,
+        log: (message, err) => console.error(`[voice ${guildId}] ${message}:`, err instanceof Error ? err.message : err),
+      });
+    } catch (err) {
+      console.error(`[voice ${guildId}] Entrance recording unavailable:`, err instanceof Error ? err.message : err);
+      return null;
+    }
   }
 
   stop(guildId: string, channelId?: string) {
@@ -118,6 +188,7 @@ export class DiscordVoiceAdapter implements VoicePort {
 
   /** Shutdown: tears everything down regardless of recordings. */
   destroyAll() {
+    for (const capture of this.#captures) capture.cancelTail(); // save what we have instead of waiting out the tail
     for (const id of [...this.#guilds.keys()]) this.#destroy(id);
   }
 

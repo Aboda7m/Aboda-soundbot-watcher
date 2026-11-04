@@ -1,5 +1,5 @@
 import type { VoiceConnection } from "@discordjs/voice";
-import type { VoicePort } from "./VoicePort.ts";
+import type { PlayOptions, VoicePort } from "./VoicePort.ts";
 
 /**
  * Several bot accounts, one voice pool.
@@ -128,11 +128,12 @@ export class VoiceHub implements VoicePort {
 
   // ---------- playback (VoicePort) ----------
 
-  async play(guildId: string, channelId: string, filePath: string, maxDurationSec?: number, onStarted?: () => void): Promise<void> {
+  async play(guildId: string, channelId: string, filePath: string, maxDurationSec?: number, onStarted?: () => void, options?: PlayOptions): Promise<void> {
     const slot = await this.#acquire(guildId, channelId);
     const st = this.#st(slot.id, guildId);
     try {
-      await slot.adapter.play(guildId, channelId, filePath, maxDurationSec, onStarted);
+      // `options` (entrance capture) travels with the sound to whichever bot was picked: that same bot records.
+      await slot.adapter.play(guildId, channelId, filePath, maxDurationSec, onStarted, options);
     } finally {
       st.playing = null;
       this.#wake(guildId);

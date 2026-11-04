@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { VoicePort } from "../voice/VoicePort.ts";
+import type { PlayOptions, VoicePort } from "../voice/VoicePort.ts";
 import { logSoundPlay, type SoundPlayTrigger } from "../watcher/SoundPlayLogger.ts";
 
 export type PlaySource = "entrance" | "exit" | "manual";
@@ -12,6 +12,8 @@ export interface PlayRequest {
   /** How the request arrived, for the play log. Left out = derived from `source`. */
   trigger?: SoundPlayTrigger;
   requestedBy?: { userId: string; username?: string | null } | null;
+  /** Whose entrance this is (automatic entrances). Entrance recordings fall back to `requestedBy` when it is left out. */
+  entrant?: { userId: string; username?: string | null } | null;
   /** Automatic entrance-only cap. Ignored for manual and exit requests. */
   maxDurationSec?: number;
 }
@@ -241,7 +243,14 @@ export class SoundQueue {
             throw new Error(`Sound "${req.sound}" no longer exists`);
           }
 
-          await this.#d.voice.play(guildId, req.channelId, path, req.source === "entrance" ? req.maxDurationSec : undefined, () => this.#d.onStarted?.(req));
+          await this.#d.voice.play(
+            guildId,
+            req.channelId,
+            path,
+            req.source === "entrance" ? req.maxDurationSec : undefined,
+            () => this.#d.onStarted?.(req),
+            this.#playOptions(req),
+          );
           succeeded = true;
           this.#d.onPlayed?.(req.sound);
           this.#recordPlay(req);
@@ -263,6 +272,13 @@ export class SoundQueue {
         this.#scheduleLeave(guildId, channelId, g);
       }
     }
+  }
+
+  /** Automatic entrances ask the playing worker to record the reactions; everything else plays exactly as before. */
+  #playOptions(req: QueueItem): PlayOptions | undefined {
+    if (req.source !== "entrance") return undefined;
+    if (req.trigger !== undefined && req.trigger !== "auto-entrance") return undefined;
+    return { captureEntrance: { soundName: req.sound, entrant: req.entrant ?? req.requestedBy ?? null } };
   }
 
   /**

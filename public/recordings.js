@@ -94,6 +94,14 @@ function statusBadge(status) {
 const segLabel = (seg) => seg.username || seg.userId || "Unknown speaker";
 const speakerKey = (sp) => sp.id || (sp.name ? `name:${sp.name}` : "unknown");
 const speakerLabel = (sp) => sp.name || sp.id || "Unknown speaker";
+// Entrance recordings (the bot's own entrance sound plus the reactions to it) carry type "entrance".
+const entranceLabel = (s) =>
+  s.type === "entrance" && s.entrance
+    ? `Entrance: ${[s.entrance.entrantName || s.entrance.entrantId, s.entrance.soundName].filter(Boolean).join(" · ")}`
+    : null;
+function typeBadge(s) {
+  return s.type === "entrance" ? el("span", { class: "badge", "data-kind": "entrance", text: "Entrance" }) : null;
+}
 const guildLabel = (s) => s.guildName || `Server ${s.guildId}`;
 const channelLabel = (s) => s.channelName || (s.channelId ? `channel ${s.channelId}` : null);
 
@@ -137,6 +145,7 @@ function indexSession(s) {
   const parts = [
     s.guildName, s.guildId, s.channelName, s.channelId, s.id, s.status,
     s.initiatedBy && s.initiatedBy.name, s.initiatedBy && s.initiatedBy.id,
+    s.type, s.entrance && s.entrance.entrantName, s.entrance && s.entrance.entrantId, s.entrance && s.entrance.soundName,
     localDayKey(started), s.startedAt.slice(0, 10), dayFmt.format(started), monthFmt.format(started), String(started.getFullYear()),
   ];
   for (const sp of s.speakers) parts.push(sp.name, sp.id);
@@ -215,6 +224,7 @@ function card(s) {
   const chan = channelLabel(s);
   const title = el("p", { class: "c-title" }, el("span", { text: guildLabel(s) }));
   if (chan) title.append(el("span", { class: "chan", text: `  ·  ${s.channelName ? "#" : ""}${chan}` }));
+  if (entranceLabel(s)) title.append(el("span", { class: "chan", text: `  ·  ${entranceLabel(s)}` }));
 
   const people = el("div", { class: "c-people" });
   const MAXCHIPS = 6;
@@ -227,6 +237,7 @@ function card(s) {
   const meta = el("div", { class: "c-meta" },
     el("b", { text: fmtDur(s.durationSec) }),
     el("span", { class: "dim", text: `${nf.format(s.segments)} ${s.segments === 1 ? "segment" : "segments"} · ${fmtBytes(s.bytes)}` }),
+    typeBadge(s),
     statusBadge(s.status),
   );
   meta.firstChild.style.color = "var(--text)";
@@ -666,7 +677,8 @@ $("export-selected").addEventListener("click", () => exportMp3([...D.selected], 
 function buildSegs(data) {
   const segs = data.tracks.map((t, i) => ({
     ...t,
-    key: t.userId || (t.username ? `name:${t.username}` : "unknown"),
+    // The entrance sound is its own lane, so it can be hidden or turned down without touching anyone's speech.
+    key: t.kind === "sound" ? `sound:${t.file}` : t.userId || (t.username ? `name:${t.username}` : "unknown"),
     no: i + 1,
   }));
   return segs;
@@ -819,8 +831,11 @@ function renderDetail(data) {
   meta.replaceChildren(
     `${fmtDur(s.durationSec)} · ${nf.format(s.segments)} ${s.segments === 1 ? "segment" : "segments"} · ${fmtBytes(s.bytes)}`,
   );
+  const kind = typeBadge(s);
+  if (kind) meta.append(" · ", kind);
   const badge = statusBadge(s.status);
   if (badge) meta.append(" · ", badge);
+  if (entranceLabel(s)) meta.append(` · ${entranceLabel(s)}`);
   if (s.initiatedBy) meta.append(` · started by ${s.initiatedBy.name || s.initiatedBy.id}`);
   meta.append(el("br"), "Session ", el("code", { text: s.id }), " · Server ID ", el("code", { text: s.guildId }));
   if (s.channelId) meta.append(" · Channel ID ", el("code", { text: s.channelId }));
