@@ -39,6 +39,7 @@ Each chat command lives in its own file in `src/discord/commands/` and is discov
 | `!import <url> [from X to Y]` | `import.command.ts` |
 | `!record start\|stop\|status\|list\|attach @user\|detach` | `record.command.ts` |
 | `!help [command]`, `!commands` | `help.command.ts` |
+| `!guild-entrance [list\|clear @user\|clear-all [confirm]]` | `guild-entrance.command.ts` |
 
 Shared code: `textCommand.ts` (pure parsing and sound search), `commandTypes.ts` (the interface below),
 `commandUtils.ts` (reply helpers), `commandRegistry.ts` (the loader), `textCommands.ts` (dispatch),
@@ -61,6 +62,33 @@ and `unavailable`. Use `{p}` for the command prefix in any text.
 - A form you cannot use is hidden, or shown locked (summary only, no examples) when `requires.discoverable` is true.
   Use `discoverable` only for commands that already answer "you don't have permission"; leave it off for commands that
   stay silent for strangers (like `!access`).
+
+### `!guild-entrance`
+
+Administrators can assign a member's entrance sound, or suppress it, for one server only on the dashboard's entrance
+admin page. Such an **override** beats the member's own settings in that server (order when someone joins voice:
+server entrances disabled, then the override, then the member's own setting for the server, then their personal
+sound), which is why a member's personal entrance sound can fail to play there. `!guild-entrance` lists and releases
+overrides:
+
+| Command | What it does |
+|---|---|
+| `!guild-entrance` | Explains overrides and why they can stop a personal entrance sound |
+| `!guild-entrance list` | Lists every member with an override in this server: id, and assigned sound or suppressed |
+| `!guild-entrance clear @user` (or an id) | Releases that member's override |
+| `!guild-entrance clear-all` | Preview only: how many overrides would be removed, and what that does |
+| `!guild-entrance clear-all confirm` | Removes every override in this server (one save) |
+
+- Clearing **releases** the override (the entry is deleted, not turned into a suppression), so the member's own entrance
+  sound applies again. This works for both assigned and suppressed overrides.
+- It never changes personal entrance sounds, members' own per-server settings, the server's entrance policy, or other
+  servers. Overrides can be created only on the dashboard, not by this command.
+- Who may use it is the same rule as `!entrance-policy`: bot owners, users with the `entrance.manage` permission, and
+  Discord members with Administrator or Manage Server. Everyone else gets no reply and does not see the command in
+  `!help` (owners see it there too).
+- Only the exact word `confirm` removes anything; `clear-all` alone, or with any other word, changes nothing.
+- `SoundRepository.releaseAllGuildEntrances(guildId)` is the bulk operation behind `clear-all confirm`, and
+  `guildEntranceOverrides(guildId)` backs `list`.
 
 ### Adding a text command
 

@@ -181,6 +181,34 @@ export class SoundRepository {
     this.#dirty = true; this.flush(); return true;
   }
 
+  /**
+   * Every admin override in ONE guild, sorted by user id: `sound` is the assigned sound, or null when the member is
+   * explicitly suppressed (stored as ""). Read-only; personal entrances and other guilds are not involved.
+   */
+  guildEntranceOverrides(guildId: string): { userId: string; sound: string | null }[] {
+    this.#reloadIfChanged();
+    if (!Object.hasOwn(this.#data.guildEntrances, guildId)) return [];
+    return Object.entries(this.#data.guildEntrances[guildId])
+      .map(([userId, sound]) => ({ userId, sound: sound || null }))
+      .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0));
+  }
+
+  /**
+   * Bulk `releaseGuildEntrance`: deletes every admin override (assigned and suppressed) of ONE guild and saves once.
+   * Personal entrances, members' own per-guild preferences, the guild's policy and every other guild are untouched.
+   * Returns how many overrides were removed (0 = nothing changed, nothing saved).
+   */
+  releaseAllGuildEntrances(guildId: string): number {
+    this.#reloadIfChanged();
+    if (!Object.hasOwn(this.#data.guildEntrances, guildId)) return 0;
+    const count = Object.keys(this.#data.guildEntrances[guildId]).length;
+    if (count === 0) return 0;
+    delete this.#data.guildEntrances[guildId];
+    this.#dirty = true;
+    this.flush();
+    return count;
+  }
+
   userGuildEntrance(userId: string, guildId: string): string | undefined {
     this.#reloadIfChanged();
     const map = this.#data.userGuildEntrances[guildId];
