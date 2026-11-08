@@ -6,6 +6,7 @@
  * See README.md ("Adding a text command") for a worked example.
  */
 import type { AccessPolicy } from "../access/AccessPolicy.ts";
+import type { CommandRegistry } from "./commandRegistry.ts";
 import type { ImportService } from "../import/ImportService.ts";
 import type { SoundLibrary } from "../sound/SoundLibrary.ts";
 import type { SoundQueue } from "../sound/SoundQueue.ts";
@@ -82,6 +83,59 @@ export interface CommandContext {
   message: GuildCommandMessage;
   guildId: string;
   deps: CommandDeps;
+  /** The loaded command registry, set by the dispatcher. Only meta commands such as `!help` need it. */
+  registry?: CommandRegistry;
+}
+
+/**
+ * Help metadata that `!help` / `!commands` renders. The whole block is optional, but a block is only ever
+ * shown when it is COMPLETE (`helpProblems` in helpFormat.ts is the one validator behind the startup warning,
+ * the owner's diagnostics and what regular users can see). Metadata can never affect loading or behavior.
+ *
+ * REQUIRED: `summary`; `usages` (at least one), and for every usage `usage`, `summary` and `examples` (at least one).
+ * OPTIONAL: `synopsis`, `notes`; per usage `requires` (whose `label` and `check` are then required, `discoverable`
+ * optional) and `unavailable`.
+ * Strings may use `{p}` where the command prefix goes (`{p}entrance <sound>`).
+ */
+export interface CommandHelp {
+  /** REQUIRED. One line: what the command is for. */
+  summary: string;
+  /** Optional. How the command is shown in the overview. Default: `{p}<canonical name>`. */
+  synopsis?: string;
+  /** REQUIRED, at least one. Every way to invoke the command. */
+  usages: readonly HelpUsage[];
+  /** Optional. Extra remarks, shown on `!help <command>` only when the viewer can run at least one usage. */
+  notes?: readonly string[];
+}
+
+export interface HelpUsage {
+  /** REQUIRED. The syntax, e.g. `{p}entrance @user <sound>`. */
+  usage: string;
+  /** REQUIRED. What this form does (lowercase, no trailing period reads best). */
+  summary: string;
+  /** REQUIRED, at least one. */
+  examples: readonly string[];
+  /** Optional. Set when only some people may run this form; see `HelpRequirement`. */
+  requires?: HelpRequirement;
+  /** Optional. A short reason when the form cannot work right now (e.g. a disabled feature). Not about permissions. */
+  unavailable?: (context: CommandContext) => string | undefined;
+}
+
+/**
+ * Describes a restriction WITHOUT enforcing it: `check` must call the same predicate the command's own
+ * `execute` uses, so `!help` never shows something the command would refuse (or hides something it would accept).
+ */
+export interface HelpRequirement {
+  /** REQUIRED. Shown next to a locked form, e.g. "needs the `import` permission". */
+  label: string;
+  /** REQUIRED. The command's own permission predicate. */
+  check: (context: CommandContext) => boolean;
+  /**
+   * Optional (default false). What `!help` does for someone who fails `check`: false hides the form completely
+   * (for commands that deliberately give strangers no reply); true lists it as locked (summary only, no examples),
+   * for commands that already tell people they lack permission. Bot owners always see every form.
+   */
+  discoverable?: boolean;
 }
 
 export interface TextCommand<P> {
@@ -93,6 +147,8 @@ export interface TextCommand<P> {
   names: readonly [string, ...string[]];
   /** One line, used in startup logs and errors. */
   description: string;
+  /** Optional documentation for `!help`. Missing or malformed help never affects loading or behavior. */
+  help?: CommandHelp;
   /**
    * Decides whether `content` is this command and extracts its arguments. Return `null` when the
    * message is not for this command (the bot then stays silent). Called only for messages whose

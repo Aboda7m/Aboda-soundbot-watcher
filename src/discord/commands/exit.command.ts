@@ -1,6 +1,6 @@
 import type { SoundLibrary } from "../../sound/SoundLibrary.ts";
 import type { SoundRepository } from "../../sound/SoundRepository.ts";
-import { defineTextCommand, type CommandMessage } from "../commandTypes.ts";
+import { defineTextCommand, type CommandContext, type CommandMessage } from "../commandTypes.ts";
 import { formatChoices, say } from "../commandUtils.ts";
 import { escapeMarkdown, parseExitCommand, partialMatches, resolveSoundName } from "../textCommand.ts";
 
@@ -60,9 +60,24 @@ export async function handleExit(
   );
 }
 
+const needsRepo = ({ deps }: CommandContext): string | undefined => (deps.repo ? undefined : "exit sounds are not available right now");
+
 export default defineTextCommand({
   names: ["exit"],
   description: "Show, set or clear your exit sound (plays when you leave voice)",
+  help: {
+    summary: "Show, set or clear the sound played when you leave a voice channel.",
+    synopsis: "{p}exit [<sound> | {p}clear]",
+    usages: [
+      { usage: "{p}exit", summary: "show your exit sound", examples: ["{p}exit"], unavailable: needsRepo },
+      { usage: "{p}exit <sound>", summary: "set your exit sound", examples: ['{p}exit "air horn"'], unavailable: needsRepo },
+      { usage: "{p}exit {p}clear", summary: "clear your exit sound", examples: ["{p}exit {p}clear"], unavailable: needsRepo },
+    ],
+    notes: [
+      "The sound name must match exactly (letter case is ignored). If nothing matches I suggest similar names; `{p}soundlist` shows them all.",
+      "It plays when you leave voice, and also when you switch to another channel. A cooldown may skip repeats.",
+    ],
+  },
   parse: parseExitCommand,
   execute: async ({ message, deps }, cmd) => {
     await handleExit(message, cmd, { library: deps.library, repo: deps.repo, prefix: deps.prefix });

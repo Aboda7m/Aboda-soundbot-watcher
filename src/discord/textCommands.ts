@@ -5,6 +5,7 @@
 import { Events, type Client } from "discord.js";
 import { describeRegistry, loadCommands, type CommandRegistry } from "./commandRegistry.ts";
 import type { CommandDeps, IncomingMessage } from "./commandTypes.ts";
+import { formatHelpWarning } from "./helpFormat.ts";
 
 // Compatibility re-exports: these used to be defined in this file.
 export type { CommandDeps, CommandMessage } from "./commandTypes.ts";
@@ -42,7 +43,7 @@ export async function handleTextMessage(
     const parsed = entry.command.parse(message.content, deps.prefix);
     if (parsed === null) return;
 
-    await entry.command.execute({ message, guildId: message.guild.id, deps }, parsed);
+    await entry.command.execute({ message, guildId: message.guild.id, deps, registry }, parsed);
   } catch (err) {
     console.error("Text command failed:", err);
   }
@@ -53,6 +54,8 @@ export interface RegisterOptions {
   commandsDir?: URL;
   /** Startup log line sink. Default: console.log. */
   log?: (line: string) => void;
+  /** Sink for the single help-metadata warning. Default: console.warn. */
+  warn?: (message: string) => void;
 }
 
 /**
@@ -67,6 +70,9 @@ export async function registerTextCommands(
 ): Promise<void> {
   const registry = await loadCommands(options.commandsDir);
   (options.log ?? console.log)(`Text commands (prefix "${deps.prefix}"): ${describeRegistry(registry)}`);
+  // Not an error: commands with incomplete help still load and run; `!help` just cannot show them to regular users.
+  const helpWarning = formatHelpWarning(registry, deps.prefix);
+  if (helpWarning) (options.warn ?? console.warn)(helpWarning);
 
   client.on(Events.MessageCreate, async (message) => {
     await handleTextMessage(message, registry, deps);

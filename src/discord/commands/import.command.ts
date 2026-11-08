@@ -1,15 +1,39 @@
-import { defineTextCommand } from "../commandTypes.ts";
+import type { AccessPolicy } from "../../access/AccessPolicy.ts";
+import { defineTextCommand, type CommandMessage } from "../commandTypes.ts";
 import { parseImportCommand } from "../textCommand.ts";
+
+/** Adding sounds changes the shared library for every server, so it needs an explicit grant from the owner. */
+const canImport = (message: CommandMessage, access: AccessPolicy): boolean => access.can(message.author.id, "import");
 
 export default defineTextCommand({
   names: ["import"],
   description: "Import a YouTube URL as a sound, optionally trimmed: !import <URL> [from X to Y]",
+  help: {
+    summary: "Import a YouTube URL as a new sound, optionally trimmed.",
+    synopsis: "{p}import <YouTube URL> [from X to Y]",
+    usages: [
+      {
+        usage: "{p}import <YouTube URL> [from <start> to <end>]",
+        summary: "download the audio and add it to the sound library",
+        examples: ["{p}import https://www.youtube.com/watch?v=VIDEO_ID", "{p}import https://www.youtube.com/watch?v=VIDEO_ID from 0:05 to 0:12"],
+        requires: {
+          label: "needs the `import` permission from the bot owner",
+          check: ({ message, deps }) => canImport(message, deps.access),
+          discoverable: true, // the command already answers "you don't have permission" to everyone else
+        },
+        unavailable: ({ deps }) => (deps.importer ? undefined : "the import service is disabled on this bot"),
+      },
+    ],
+    notes: [
+      "Times are seconds (`90`), `M:SS` (`1:30`) or `H:MM:SS`. A range that is not valid (end not after start) is ignored and the sound is imported without your trim.",
+      "The sound is named automatically from the video title (`_1`, `_2`... is added if the name is taken). Play it with `{p}sound \"<name>\"`.",
+    ],
+  },
   parse: parseImportCommand,
   execute: async ({ message, deps }, importCmd) => {
     const { library, prefix, importer, access } = deps;
 
-    // Adding sounds changes the shared library for every server, so it needs an explicit grant from the owner.
-    if (!access.can(message.author.id, "import")) {
+    if (!canImport(message, access)) {
       await message.reply("You don't have permission to import sounds. Ask the bot owner to grant it.");
       return;
     }

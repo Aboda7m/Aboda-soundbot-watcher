@@ -1,5 +1,5 @@
 import type { SoundRepository } from "../../sound/SoundRepository.ts";
-import { defineTextCommand, type CommandMessage } from "../commandTypes.ts";
+import { defineTextCommand, type CommandContext, type CommandMessage } from "../commandTypes.ts";
 import { say } from "../commandUtils.ts";
 
 type PolicyAction =
@@ -54,7 +54,7 @@ export function parseEntrancePolicyCommand(content: string, prefix = "!"): Polic
   return null;
 }
 
-const isGuildPolicyAdmin = (message: CommandMessage, access: { can(userId: string, capability: "entrance.manage"): boolean }): boolean =>
+export const isGuildPolicyAdmin = (message: CommandMessage, access: { can(userId: string, capability: "entrance.manage"): boolean }): boolean =>
   Boolean(message.member?.permissions.has(8n) ||
     message.member?.permissions.has(32n) ||
     access.can(message.author.id, "entrance.manage"));
@@ -121,9 +121,32 @@ export async function handleEntrancePolicy(
   }
 }
 
+const GUILD_ADMIN = {
+  label: "needs server Administrator or Manage Server, or the `entrance.manage` permission",
+  check: ({ message, deps }: CommandContext) => isGuildPolicyAdmin(message, deps.access),
+  discoverable: true, // the command already tells everyone else that this is restricted
+};
+const needsRepo = ({ deps }: CommandContext): string | undefined => (deps.repo ? undefined : "entrance policy settings are unavailable right now");
+const form = (usage: string, summary: string, examples: string[]) => ({ usage, summary, examples, requires: GUILD_ADMIN, unavailable: needsRepo });
+
 export default defineTextCommand({
   names: ["entrance-policy"],
   description: "Show or configure this server's automatic entrance policy",
+  help: {
+    summary: "Show or change this server's automatic entrance sound policy.",
+    synopsis: "{p}entrance-policy [enabled|reconnect|cooldown|cap]",
+    usages: [
+      form("{p}entrance-policy", "show this server's policy (`show` or `status` do the same)", ["{p}entrance-policy"]),
+      form("{p}entrance-policy enabled on|off", "turn automatic entrance sounds on or off for this server", ["{p}entrance-policy enabled off"]),
+      form("{p}entrance-policy reconnect <time|off>", "minimum time away before a rejoin counts as a fresh entrance (`grace` also works)", ["{p}entrance-policy reconnect 5m"]),
+      form("{p}entrance-policy cooldown <time|off>", "minimum time between one member's entrance sounds, overriding their own setting", ["{p}entrance-policy cooldown 30s"]),
+      form("{p}entrance-policy cap <seconds|off>", "longest an automatic entrance sound may play, 1 to 30 seconds (`duration` also works)", ["{p}entrance-policy cap 10", "{p}entrance-policy cap off"]),
+    ],
+    notes: [
+      "Times are seconds (`90`) or with a unit (`30s`, `5m`, `1h`), up to 24 hours; `off` turns the setting off.",
+      "Settings apply to this server only.",
+    ],
+  },
   parse: parseEntrancePolicyCommand,
   execute: async ({ message, guildId, deps }, action) => {
     await handleEntrancePolicy(message, guildId, action, { repo: deps.repo, prefix: deps.prefix, access: deps.access });

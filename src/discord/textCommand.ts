@@ -115,6 +115,21 @@ export function parseSoundListCommand(content: string, prefix = "!"): { kind: "s
   return commandRest(content, prefix, "soundlist") === null ? null : { kind: "soundlist" };
 }
 
+export type HelpCommand = { kind: "help-overview" } | { kind: "help-detail"; topic: string };
+
+/**
+ * `!help` / `!commands` list the commands; `!help <command>` (or `!help !<command>`) shows one.
+ * Only the first word after the command is used. `!helpme` is not this command.
+ */
+export function parseHelpCommand(content: string, prefix = "!"): HelpCommand | null {
+  const rest = commandRest(content, prefix, "help") ?? commandRest(content, prefix, "commands");
+  if (rest === null) return null;
+  let topic = (rest.split(/\s+/, 1)[0] ?? "").replace(QUOTES, "").toLowerCase();
+  const head = prefix.toLowerCase();
+  if (head && topic.startsWith(head)) topic = topic.slice(head.length);
+  return topic ? { kind: "help-detail", topic } : { kind: "help-overview" };
+}
+
 /**
  * Entrance command syntax:
  *   !entrance                         Show your own assignment

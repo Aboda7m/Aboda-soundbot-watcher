@@ -14,6 +14,22 @@ const FAIL_TEXT: Record<Extract<EnqueueResult, { ok: false }>["reason"], string>
 export default defineTextCommand({
   names: ["sound"],
   description: 'Play a sound in your voice channel: !sound "name" (fuzzy matching, asks when unsure)',
+  help: {
+    summary: "Play a sound in your voice channel.",
+    synopsis: '{p}sound "<name>"',
+    usages: [
+      {
+        usage: '{p}sound "<name>"',
+        summary: "play a sound in the voice channel you are in",
+        examples: ['{p}sound "air horn"', "{p}sound air horn"],
+      },
+    ],
+    notes: [
+      "Join a voice channel first. The quotes are optional.",
+      "Names are matched forgivingly (letter case, word order, a unique part of the name, small typos). If several sounds fit, or I'm not sure, I list the candidates instead of guessing.",
+      "`{p}soundlist` shows every available sound.",
+    ],
+  },
   parse: parseSoundCommand,
   execute: async ({ message, guildId, deps }, cmd) => {
     const { library, queue, prefix } = deps;

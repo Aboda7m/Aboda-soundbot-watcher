@@ -4,7 +4,8 @@ import { entersState, VoiceConnectionStatus } from "@discordjs/voice";
 import { ChannelType, type Message } from "discord.js";
 import { recordingManager } from "../../recording/RecordingManager.ts";
 import { RecordingPermissions } from "../../recording/RecordingPermissions.ts";
-import { defineTextCommand } from "../commandTypes.ts";
+import type { AccessPolicy } from "../../access/AccessPolicy.ts";
+import { defineTextCommand, type GuildCommandMessage, type HelpRequirement } from "../commandTypes.ts";
 import type { RecordingLease } from "../../voice/VoiceHub.ts";
 import { NO_MENTIONS, say } from "../commandUtils.ts";
 
@@ -14,6 +15,20 @@ const SUBS = ["start", "stop", "status", "list", "attach", "detach"] as const;
 /** A user mention (`<@123>` / `<@!123>`) or a raw user id. */
 const USER_ARG = /^(?:<@!?(\d{17,20})>|(\d{17,20}))$/;
 const leases = new Map<string, RecordingLease>();
+
+const RECORD_PERMISSION_TEXT = "owner, Administrator, or Manage Channels + Move Members";
+
+/** The rule the restricted subcommands enforce. `!help` calls it too, so what it shows matches what would be accepted. */
+const canManageRecordings = (message: GuildCommandMessage, access: AccessPolicy): boolean => {
+  const member = (message as unknown as Message<true>).member; // a real discord.js message at runtime
+  return !!(member && RecordingPermissions.canUserRecord(member, access));
+};
+
+const MANAGE_RECORDINGS: HelpRequirement = {
+  label: `needs ${RECORD_PERMISSION_TEXT}`,
+  check: ({ message, deps }) => canManageRecordings(message, deps.access),
+  discoverable: true, // the command already tells everyone else they lack permission
+};
 
 /** Newest session ids (folder names sort by timestamp) for one guild. */
 async function listSessions(guildId: string, limit: number): Promise<string[]> {
@@ -39,6 +54,21 @@ async function listSessions(guildId: string, limit: number): Promise<string[]> {
 export default defineTextCommand({
   names: ["record"],
   description: "Record the voice channel (owners/admins): !record start | stop | status | list | attach @user | detach",
+  help: {
+    summary: "Record the voice channel you are in, or follow a user and record where they go.",
+    synopsis: "{p}record <start|stop|status|list|attach|detach>",
+    usages: [
+      { usage: "{p}record start", summary: "start recording your voice channel (everyone in it is recorded)", examples: ["{p}record start"], requires: MANAGE_RECORDINGS },
+      { usage: "{p}record stop", summary: "stop and save the current recording", examples: ["{p}record stop"], requires: MANAGE_RECORDINGS },
+      { usage: "{p}record status", summary: "show the current recording and any user being followed", examples: ["{p}record status"] },
+      { usage: "{p}record list", summary: "list this server's 10 most recent recordings", examples: ["{p}record list"] },
+      { usage: "{p}record attach @user", summary: "follow a user: record the voice channel they are in, moving with them", examples: ["{p}record attach @Sam", "{p}record attach 123456789012345678"], requires: MANAGE_RECORDINGS },
+      { usage: "{p}record detach", summary: "stop following and save the running session", examples: ["{p}record detach"], requires: MANAGE_RECORDINGS },
+    ],
+    notes: [
+      "Only one recording can run per server at a time. `{p}record stop` does not end a follow; use `{p}record detach` for that.",
+    ],
+  },
   parse: (content, prefix): RecordCommand | null => {
     const [first = "", sub = "", arg = ""] = content.trim().split(/\s+/);
     if (first.toLowerCase() !== `${prefix}record`.toLowerCase()) return null;
@@ -60,8 +90,8 @@ export default defineTextCommand({
     }
 
     // Read-only subcommands are open to everyone allowed to use the bot; the rest are restricted.
-    if ((cmd.sub === "start" || cmd.sub === "stop" || cmd.sub === "attach" || cmd.sub === "detach") && !(msg.member && RecordingPermissions.canUserRecord(msg.member, deps.access))) {
-      await say(message, "You do not have permission to manage recordings (owner, Administrator, or Manage Channels + Move Members).");
+    if ((cmd.sub === "start" || cmd.sub === "stop" || cmd.sub === "attach" || cmd.sub === "detach") && !canManageRecordings(message, deps.access)) {
+      await say(message, `You do not have permission to manage recordings (${RECORD_PERMISSION_TEXT}).`);
       return;
     }
 

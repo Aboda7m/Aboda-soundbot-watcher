@@ -1,5 +1,5 @@
 import { CAPABILITIES, isCapability, type AccessPolicy } from "../../access/AccessPolicy.ts";
-import { defineTextCommand, type CommandContext } from "../commandTypes.ts";
+import { defineTextCommand, type CommandContext, type CommandMessage, type HelpRequirement } from "../commandTypes.ts";
 import { say } from "../commandUtils.ts";
 
 /**
@@ -9,6 +9,16 @@ import { say } from "../commandUtils.ts";
  */
 const USER = /^<@!?(\d{15,25})>$|^(\d{15,25})$/;
 const SERVER = /^\d{15,25}$/;
+
+/** The one owner test: `run` (silent for everyone else) and `!help` both use it. */
+const isBotOwner = (message: CommandMessage, access: AccessPolicy): boolean => access.isOwner(message.author.id);
+
+/** Not `discoverable`: this command gives non-owners no reply, so `!help` must not reveal it to them either. */
+const OWNER_ONLY: HelpRequirement = {
+  label: "bot owners only",
+  check: ({ message, deps }) => isBotOwner(message, deps.access),
+};
+const ownerForm = (usage: string, summary: string, examples: string[]) => ({ usage, summary, examples, requires: OWNER_ONLY });
 
 const userId = (token: string | undefined): string | null => {
   const m = token ? USER.exec(token) : null;
@@ -55,7 +65,7 @@ function listing(a: AccessPolicy): string {
 async function run({ message, guildId, deps }: CommandContext, args: string[]): Promise<void> {
   const access = deps.access;
   const p = deps.prefix;
-  if (!access.isOwner(message.author.id)) return; // silent for everyone else
+  if (!isBotOwner(message, access)) return; // silent for everyone else
 
   const sub = args[0]?.toLowerCase();
   const reply = (text: string) => say(message, text);
@@ -132,6 +142,25 @@ async function run({ message, guildId, deps }: CommandContext, args: string[]): 
 export default defineTextCommand({
   names: ["access"],
   description: "Owner only: control who may use the bot (whitelist/blacklist) and who has extra permissions",
+  help: {
+    summary: "Owner only: control who may use the bot and who has extra permissions.",
+    synopsis: "{p}access [status|list|whitelist|blacklist|allow|unallow|block|unblock|grant|revoke]",
+    usages: [
+      ownerForm("{p}access", "show the current settings (`status` does the same)", ["{p}access", "{p}access status"]),
+      ownerForm("{p}access list", "DM you every allowed/blocked id and every granted permission", ["{p}access list"]),
+      ownerForm("{p}access whitelist on|off", "when on, only allowed servers (or allowed users anywhere) can use the bot", ["{p}access whitelist on"]),
+      ownerForm("{p}access blacklist on|off", "when on, blocked servers and users are ignored", ["{p}access blacklist on"]),
+      ownerForm("{p}access allow|unallow server <id|here>", "add or remove a server on the allow list (`here` = this server)", ["{p}access allow server here"]),
+      ownerForm("{p}access allow|unallow user <@user|id>", "add or remove a user on the allow list", ["{p}access allow user @Sam"]),
+      ownerForm("{p}access block|unblock server <id|here>", "block or unblock a server", ["{p}access block server 123456789012345678"]),
+      ownerForm("{p}access block|unblock user <@user|id>", "block or unblock a user (owners cannot be blocked)", ["{p}access block user @Sam"]),
+      ownerForm(`{p}access grant|revoke <@user|id> <${CAPABILITIES.join("|")}>`, "give or take away one permission", ["{p}access grant @Sam import", "{p}access revoke @Sam import"]),
+    ],
+    notes: [
+      "Everyone who is not a bot owner gets no reply to this command. Owners are the ids in `OWNER_USER_IDS` in `.env`.",
+      "The whitelist and blacklist switches are independent and off by default; changes apply immediately.",
+    ],
+  },
   parse: (content, prefix) => {
     const text = content.trim();
     const head = `${prefix}access`;

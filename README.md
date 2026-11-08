@@ -38,9 +38,29 @@ Each chat command lives in its own file in `src/discord/commands/` and is discov
 | `!entrance`, `!RM-entrance` | `entrance.command.ts` |
 | `!import <url> [from X to Y]` | `import.command.ts` |
 | `!record start\|stop\|status\|list\|attach @user\|detach` | `record.command.ts` |
+| `!help [command]`, `!commands` | `help.command.ts` |
 
 Shared code: `textCommand.ts` (pure parsing and sound search), `commandTypes.ts` (the interface below),
-`commandUtils.ts` (reply helpers), `commandRegistry.ts` (the loader), `textCommands.ts` (dispatch).
+`commandUtils.ts` (reply helpers), `commandRegistry.ts` (the loader), `textCommands.ts` (dispatch),
+`helpFormat.ts` (validates help metadata and renders `!help`).
+
+### `!help` / `!commands`
+
+`!help` lists the commands the person may discover; `!help <command>` (an alias works too) shows every form of it
+with examples. The list is derived from the loaded registry and written from each command's `help` block. Restricted
+forms carry a `requires.check` that calls the same predicate the command itself enforces, never a second permission system.
+
+Required `help` fields: `summary`; `usages` (at least one), each with `usage`, `summary` and `examples` (at least one).
+Optional: `synopsis`, `notes`; per usage `requires` (then `label` and `check` are required, `discoverable` optional)
+and `unavailable`. Use `{p}` for the command prefix in any text.
+
+- A command whose `help` is missing or incomplete still loads and runs. Regular users never see it, in the list or by
+  name (`!help <command>` answers exactly as for an unknown command).
+- Bot owners (`OWNER_USER_IDS`) see every registered command and every form, and for an incomplete command the exact
+  missing fields. Startup prints one warning listing each affected command, its aliases and the missing fields.
+- A form you cannot use is hidden, or shown locked (summary only, no examples) when `requires.discoverable` is true.
+  Use `discoverable` only for commands that already answer "you don't have permission"; leave it off for commands that
+  stay silent for strangers (like `!access`).
 
 ### Adding a text command
 
@@ -52,6 +72,11 @@ import { defineTextCommand } from "../commandTypes.ts";
 export default defineTextCommand({
   names: ["ping", "pong"],              // lowercase, no prefix; the first is the canonical name, the rest are aliases
   description: "Replies with pong",     // shown in the startup log and in error messages
+  help: {                               // shown by `!help` (see above); {p} = the command prefix
+    summary: "Replies with pong.",
+    usages: [{ usage: "{p}ping [text]", summary: "reply with pong", examples: ["{p}ping hello"] }],
+    // A restricted form adds: requires: { label: "needs X", check: ({ message, deps }) => <the test execute uses> }
+  },
   // Only called when the first word is one of `names` (any capitalisation). Return null to stay silent.
   parse: (content) => ({ args: content.trim().split(/\s+/).slice(1) }),
   // `message` is the Discord message, `deps` is { library, queue, prefix, importer?, repo? }.

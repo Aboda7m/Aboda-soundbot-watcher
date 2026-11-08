@@ -1,7 +1,7 @@
 import type { AccessPolicy } from "../../access/AccessPolicy.ts";
 import type { SoundLibrary } from "../../sound/SoundLibrary.ts";
 import type { SoundRepository } from "../../sound/SoundRepository.ts";
-import { defineTextCommand, type CommandMessage } from "../commandTypes.ts";
+import { defineTextCommand, type CommandContext, type CommandMessage, type HelpRequirement } from "../commandTypes.ts";
 import { formatChoices, say } from "../commandUtils.ts";
 import { escapeMarkdown, parseEntranceCommand, partialMatches, resolveSoundName } from "../textCommand.ts";
 
@@ -140,10 +140,34 @@ export async function handleEntrance(
   }
 }
 
+const MANAGE_OTHERS: HelpRequirement = {
+  label: "needs the `entrance.manage` permission from the bot owner",
+  check: ({ message, deps }) => canManageEntrances(message, deps.access),
+  discoverable: true, // the command already tells everyone else that this needs a permission
+};
+const needsRepo = ({ deps }: CommandContext): string | undefined => (deps.repo ? undefined : "entrance sounds are not available right now");
+
 // `!RM-entrance` is the same command: parseEntranceCommand recognises both spellings.
 export default defineTextCommand({
   names: ["entrance", "rm-entrance"],
-  description: "Show, set or clear an entrance sound (managing others needs Manage Server)",
+  description: "Show, set or clear an entrance sound (managing others needs the entrance.manage permission)",
+  help: {
+    summary: "Show, set or clear the sound played when you join a voice channel.",
+    synopsis: "{p}entrance [<sound> | {p}clear]",
+    usages: [
+      { usage: "{p}entrance", summary: "show your entrance sound", examples: ["{p}entrance"], unavailable: needsRepo },
+      { usage: "{p}entrance <sound>", summary: "set your entrance sound", examples: ['{p}entrance "air horn"'], unavailable: needsRepo },
+      { usage: "{p}entrance {p}clear", summary: "clear your entrance sound", examples: ["{p}entrance {p}clear"], unavailable: needsRepo },
+      { usage: "{p}rm-entrance", summary: "clear your entrance sound (same as above)", examples: ["{p}rm-entrance"], unavailable: needsRepo },
+      { usage: "{p}entrance @user", summary: "show another member's entrance sound", examples: ["{p}entrance @Sam"], requires: MANAGE_OTHERS, unavailable: needsRepo },
+      { usage: "{p}entrance @user <sound>", summary: "set another member's entrance sound", examples: ['{p}entrance @Sam "air horn"'], requires: MANAGE_OTHERS, unavailable: needsRepo },
+      { usage: "{p}entrance @user {p}clear", summary: "clear another member's entrance sound", examples: ["{p}entrance @Sam {p}clear"], requires: MANAGE_OTHERS, unavailable: needsRepo },
+    ],
+    notes: [
+      "The sound name must match exactly (letter case is ignored). If nothing matches I suggest similar names; `{p}soundlist` shows them all.",
+      "It plays when you join voice from outside a channel, not when you switch between channels. The server's entrance settings and cooldowns can also apply.",
+    ],
+  },
   parse: parseEntranceCommand,
   execute: async ({ message, deps }, cmd) => {
     await handleEntrance(message, cmd, { library: deps.library, repo: deps.repo, prefix: deps.prefix, access: deps.access });

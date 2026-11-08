@@ -38,6 +38,13 @@ export async function handleSoundList(
 export default defineTextCommand({
   names: ["soundlist"],
   description: "DM the full list of sound names",
+  help: {
+    summary: "DM you the full list of sound names.",
+    usages: [
+      { usage: "{p}soundlist", summary: "send the list of all sounds to your DMs", examples: ["{p}soundlist"] },
+    ],
+    notes: ["If I can't DM you (server DMs disabled), I say so in the channel."],
+  },
   parse: parseSoundListCommand,
   execute: async ({ message, deps }) => {
     await handleSoundList(message, deps.library);
