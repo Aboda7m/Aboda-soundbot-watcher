@@ -1,0 +1,8 @@
+.exit-page { max-width: 40rem; margin: 0 auto; padding: 1rem; }
+.exit-page .hint { opacity: .7; }
+.exit-page .row { display: flex; gap: .5rem; margin: .5rem 0 1rem; }
+.exit-page input[type="search"] { width: 100%; box-sizing: border-box; margin-bottom: .5rem; }
+.sound-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
+.sound-list li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .35rem .25rem; border-bottom: 1px solid rgba(255,255,255,.08); }
+.sound-list li[aria-current="true"] .name { font-weight: 600; }
+.msg { color: #ff8a8a; }

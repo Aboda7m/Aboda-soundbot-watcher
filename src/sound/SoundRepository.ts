@@ -268,6 +268,24 @@ export class SoundRepository {
     return this.#data.exits[userId] || undefined;
   }
 
+  /** Sets a user's personal exit sound and saves immediately. Other db.json data is left untouched. */
+  setExit(userId: string, sound: string): void {
+    this.#reloadIfChanged();
+    this.#data.exits[userId] = sound;
+    this.#dirty = true;
+    this.flush();
+  }
+
+  /** Removes a user's exit sound and saves immediately. Returns false when none was set. */
+  clearExit(userId: string): boolean {
+    this.#reloadIfChanged();
+    if (!Object.hasOwn(this.#data.exits, userId)) return false;
+    delete this.#data.exits[userId];
+    this.#dirty = true;
+    this.flush();
+    return true;
+  }
+
   sounds(): SoundMeta[] {
     this.#reloadIfChanged();
     return this.#data.sounds.map((s) => ({ ...s, tags: [...s.tags] }));

@@ -12,6 +12,10 @@ export type EntranceCommand =
   | { kind: "entrance-target-show"; targetId: string }
   | { kind: "entrance-target-set"; targetId: string; name: string }
   | { kind: "entrance-target-clear"; targetId: string };
+export type ExitCommand =
+  | { kind: "exit-show" }
+  | { kind: "exit-set"; name: string }
+  | { kind: "exit-clear" };
 export type ParsedCommand = SoundCommand | ImportCommand;
 
 const QUOTES = /^["“”„'‘’]+|["“”„'‘’]+$/g;
@@ -160,6 +164,21 @@ export function parseEntranceCommand(content: string, prefix = "!"): EntranceCom
 
   const name = rest.replace(QUOTES, "").trim();
   return name ? { kind: "entrance-set", name } : { kind: "entrance-show" };
+}
+
+/**
+ * Exit command syntax (own assignment only):
+ *   !exit                  Show your exit sound
+ *   !exit <sound name>     Set your exit sound
+ *   !exit !clear           Clear your exit sound
+ */
+export function parseExitCommand(content: string, prefix = "!"): ExitCommand | null {
+  const rest = commandRest(content, prefix, "exit");
+  if (rest === null) return null;
+  if (rest === "") return { kind: "exit-show" };
+  if (rest.toLowerCase() === `${prefix}clear`.toLowerCase()) return { kind: "exit-clear" };
+  const name = rest.replace(QUOTES, "").trim();
+  return name ? { kind: "exit-set", name } : { kind: "exit-show" };
 }
 
 export type SoundResolution =

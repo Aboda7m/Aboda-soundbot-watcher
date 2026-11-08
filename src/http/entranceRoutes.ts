@@ -34,7 +34,7 @@ export interface EntranceKit {
   guard(req: IncomingMessage, res: ServerResponse, contentType?: string): boolean;
 }
 
-const MIME: Record<string, string> = {
+export const MIME: Record<string, string> = {
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
   ".ogg": "audio/ogg",

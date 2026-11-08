@@ -12,6 +12,7 @@ import { handleLogRoute, type LogFiles } from "./logRoutes.ts";
 import { handleRecordingRoute, type RecordingFiles } from "./recordingRoutes.ts";
 import { handleCoreApi, type CoreDeps } from "./coreApi.ts";
 import { canAdministerAnyGuild, handleEntranceRoute } from "./entranceRoutes.ts";
+import { handleExitRoute } from "./exitRoutes.ts";
 import type { Client } from "discord.js";
 import { SECURITY_HEADERS, contentTypeAllowed, json, readBody, safeEqual } from "./common.ts";
 import { parseCookies, serializeCookie } from "./auth/cookies.ts";
@@ -81,6 +82,14 @@ const STATIC: Record<string, StaticEntry> = {
   },
   "/entrance.js": { file: "entrance.js", type: "text/javascript; charset=utf-8" },
   "/entrance.css": { file: "entrance.css", type: "text/css; charset=utf-8" },
+  // "My exit sound": same access model and page shape as /entrance.
+  "/exit": {
+    file: "exit.html",
+    type: "text/html; charset=utf-8",
+    csp: "default-src 'none'; script-src 'self'; style-src 'self'; media-src blob:; connect-src 'self'",
+  },
+  "/exit.js": { file: "exit.js", type: "text/javascript; charset=utf-8" },
+  "/exit.css": { file: "exit.css", type: "text/css; charset=utf-8" },
   "/entrance-admin": { file: "entrance-admin.html", type: "text/html; charset=utf-8", csp: "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'" },
   "/entrance-admin.js": { file: "entrance-admin.js", type: "text/javascript; charset=utf-8" },
   "/entrance-admin.css": { file: "entrance-admin.css", type: "text/css; charset=utf-8" },
@@ -138,7 +147,7 @@ const PUBLIC_ASSETS: Record<string, StaticEntry> = {
   "/login.css": { file: "login.css", type: "text/css; charset=utf-8" },
 };
 
-const PAGES = new Set(["/", "/entrance", "/import", "/logs", "/recordings", "/user-management", "/watch", "/stremio"]);
+const PAGES = new Set(["/", "/entrance", "/exit", "/import", "/logs", "/recordings", "/user-management", "/watch", "/stremio"]);
 
 /** Which owner-granted permission a route needs, beyond being allowed onto the dashboard at all. */
 function requiredCapability(path: string): Capability | null {
@@ -435,6 +444,9 @@ export function createPublicServer(d: PublicDeps): Server {
 
       // The entrance sound always belongs to the signed-in account of this session; no request can name another user.
       if (await handleEntranceRoute({ ...d, client: d.discordClient, canManageEntrances: (userId) => d.can(userId, "entrance.manage"), canManageSystemEntrances: (userId) => d.can(userId, "entrance.system") }, req, res, url, core)) return;
+
+      // The exit sound, like the entrance sound, always belongs to the signed-in account of this session.
+      if (await handleExitRoute({ library: d.library, repo: d.repo }, req, res, url, core)) return;
 
       if (isPost) return json(res, 404, { error: "Not found" });
 

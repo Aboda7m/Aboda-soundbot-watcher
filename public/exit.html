@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>My Exit Sound</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/exit.css">
+</head>
+<body>
+  <main class="exit-page">
+    <p><a href="/" class="btn small">&larr; Soundboard</a></p>
+    <h1>My exit sound</h1>
+    <p class="hint">Plays when you leave a voice channel the bot is watching.</p>
+
+    <section aria-labelledby="current-title">
+      <h2 id="current-title">Current</h2>
+      <p id="current" role="status">Loading&hellip;</p>
+      <div class="row">
+        <button id="preview" class="btn small" type="button" disabled>Preview</button>
+        <button id="clear" class="btn small" type="button" disabled>Clear</button>
+      </div>
+    </section>
+
+    <section aria-labelledby="pick-title">
+      <h2 id="pick-title">Choose a sound</h2>
+      <label class="visually-hidden" for="search">Search sounds</label>
+      <input id="search" type="search" placeholder="Search sounds" autocomplete="off" spellcheck="false">
+      <ul id="list" class="sound-list"></ul>
+    </section>
+
+    <p id="msg" class="msg" role="alert" hidden></p>
+  </main>
+  <script src="/exit.js"></script>
+</body>
+</html>
